@@ -1,0 +1,11 @@
+grpcio==1.60.0
+faster-whisper==0.10.0
+piper-tts==1.2.0
+pyaudio==0.2.13
+numpy==1.24.3
+soundfile==0.12.1
+webrtcvad==2.0.10
+scipy==1.11.4
+torch==2.1.0
+transformers==4.35.2
+librosa==0.10.1

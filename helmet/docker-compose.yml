@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  # Video capture and streaming service
+  video-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.video
+    container_name: helmet-video
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./models:/app/models
+    # Camera access (Linux/WSL only - Windows Docker Desktop has different requirements)
+    # devices:
+    #   - /dev/video0  # Uncomment for Linux/Jetson
+    environment:
+      - HELMET_PROFILE=dev
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    depends_on:
+      - orchestrator
+    networks:
+      - helmet-network
+    # For Windows Docker Desktop, camera access requires host networking
+    # network_mode: host  # Uncomment if needed for camera access
+
+  # AI perception and object detection service
+  perception-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.perception
+    container_name: helmet-perception
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./models:/app/models
+    environment:
+      - HELMET_PROFILE=dev
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    depends_on:
+      - orchestrator
+    networks:
+      - helmet-network
+    # GPU access for CUDA/TensorRT (uncomment for Jetson/GPU systems)
+    # runtime: nvidia
+    # environment:
+    #   - NVIDIA_VISIBLE_DEVICES=all
+
+  # Voice assistant with ASR and TTS
+  voice-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.voice
+    container_name: helmet-voice
+    ports:
+      - "50053:50053"
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - /dev/snd:/dev/snd  # Audio device access
+    devices:
+      - /dev/snd  # Audio devices
+    environment:
+      - HELMET_PROFILE=dev
+      - PYTHONUNBUFFERED=1
+      - PULSE_RUNTIME_PATH=/run/user/1000/pulse
+    restart: unless-stopped
+    depends_on:
+      - orchestrator
+    networks:
+      - helmet-network
+
+  # System orchestrator and coordination
+  orchestrator:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.orchestrator
+    container_name: helmet-orchestrator
+    ports:
+      - "50054:50054"
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./recordings:/app/recordings
+    environment:
+      - HELMET_PROFILE=dev
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - helmet-network
+
+  # Qt/QML visor UI (runs on host for display access)
+  visor-ui:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.ui
+    container_name: helmet-visor-ui
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - DISPLAY=${DISPLAY}
+      - HELMET_PROFILE=dev
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    depends_on:
+      - video-service
+      - perception-service
+      - voice-service
+      - orchestrator
+    network_mode: host  # For display access
+    # For X11 display access
+    # privileged: true
+
+  # Development tools and utilities
+  dev-tools:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.dev
+    container_name: helmet-dev-tools
+    volumes:
+      - .:/app/workspace
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+    environment:
+      - HELMET_PROFILE=dev
+    networks:
+      - helmet-network
+    profiles:
+      - dev  # Only start with --profile dev
+
+networks:
+  helmet-network:
+    driver: bridge
+    name: helmet-network
+
+volumes:
+  logs:
+    driver: local
+  recordings:
+    driver: local
+  models:
+    driver: local

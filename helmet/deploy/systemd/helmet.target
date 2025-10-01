@@ -1,0 +1,9 @@
+[Unit]
+Description=Helmet OS System Target
+Documentation=https://github.com/yourusername/helmet
+Requires=multi-user.target
+After=multi-user.target
+AllowIsolate=yes
+
+[Install]
+WantedBy=default.target

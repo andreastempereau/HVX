@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package helmet;
+
+import "google/protobuf/timestamp.proto";
+
+// Video frame metadata and data
+message FrameMeta {
+  uint64 frame_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  string format = 5; // RGB, BGR, YUV420, etc.
+  bytes data = 6; // Raw frame data or shared memory reference
+}
+
+// Detection result from perception service
+message Detection {
+  float x = 1;      // Bounding box x (normalized 0-1)
+  float y = 2;      // Bounding box y (normalized 0-1)
+  float width = 3;  // Bounding box width (normalized 0-1)
+  float height = 4; // Bounding box height (normalized 0-1)
+  string label = 5; // Object class name
+  float confidence = 6; // Detection confidence 0-1
+  uint32 class_id = 7; // Numeric class ID
+}
+
+message DetectionResult {
+  uint64 frame_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  repeated Detection detections = 3;
+  float inference_time_ms = 4;
+}
+
+// Voice assistant messages
+message Intent {
+  string text = 1;           // Transcribed text
+  string intent_name = 2;    // Classified intent ("toggle_night_mode", "screenshot", etc.)
+  map<string, string> entities = 3; // Extracted parameters
+  float confidence = 4;      // Intent confidence
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message TTSRequest {
+  string text = 1;
+  string voice_id = 2;
+  float speed = 3;
+}
+
+message TTSResponse {
+  bytes audio_data = 1;
+  string format = 2; // wav, mp3, etc.
+}
+
+// System status and telemetry
+message SystemStatus {
+  float cpu_usage = 1;
+  float gpu_usage = 2;
+  float memory_usage = 3;
+  float temperature = 4;
+  float battery_level = 5;
+  bool recording = 6;
+  string current_mode = 7; // "normal", "night", "debug", etc.
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+message HUDStatus {
+  SystemStatus system = 1;
+  bool mic_active = 2;
+  float mic_level = 3;
+  uint32 fps = 4;
+  uint32 detection_count = 5;
+  string status_message = 6;
+}
+
+// Orchestrator commands
+message Command {
+  string action = 1; // "set_mode", "toggle_recording", "screenshot", etc.
+  map<string, string> parameters = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message CommandResponse {
+  bool success = 1;
+  string message = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// Service definitions
+service VideoService {
+  rpc GetFrame(FrameRequest) returns (FrameMeta);
+  rpc StreamFrames(FrameRequest) returns (stream FrameMeta);
+}
+
+service PerceptionService {
+  rpc Infer(FrameMeta) returns (DetectionResult);
+  rpc InferStream(stream FrameMeta) returns (stream DetectionResult);
+  rpc SetROI(ROIRequest) returns (CommandResponse); // Region of interest
+}
+
+service VoiceService {
+  rpc ProcessAudio(stream AudioData) returns (stream Intent);
+  rpc Synthesize(TTSRequest) returns (TTSResponse);
+}
+
+service OrchestratorService {
+  rpc ExecuteCommand(Command) returns (CommandResponse);
+  rpc GetStatus(StatusRequest) returns (HUDStatus);
+  rpc StreamStatus(StatusRequest) returns (stream HUDStatus);
+}
+
+// Supporting message types
+message FrameRequest {
+  string source = 1; // "camera", "file", etc.
+  map<string, string> options = 2;
+}
+
+message ROIRequest {
+  float x = 1;
+  float y = 2;
+  float width = 3;
+  float height = 4;
+  bool enabled = 5;
+}
+
+message AudioData {
+  bytes data = 1;
+  uint32 sample_rate = 2;
+  uint32 channels = 3;
+  string format = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message StatusRequest {
+  repeated string components = 1; // Which status components to include
+}

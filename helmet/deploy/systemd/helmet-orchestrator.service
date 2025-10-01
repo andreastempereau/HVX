@@ -1,0 +1,33 @@
+[Unit]
+Description=Helmet Orchestrator Service
+Documentation=https://github.com/yourusername/helmet
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=helmet
+Group=helmet
+WorkingDirectory=/opt/helmet
+Environment=HELMET_PROFILE=field
+Environment=PYTHONPATH=/opt/helmet:/opt/helmet/libs
+ExecStart=/opt/helmet/venv/bin/python /opt/helmet/services/orchestrator/orchestrator_service.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helmet-orchestrator
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=30%
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/helmet/logs /opt/helmet/recordings
+PrivateTmp=true
+
+[Install]
+WantedBy=helmet.target

@@ -1,0 +1,37 @@
+[Unit]
+Description=Helmet Perception Service
+Documentation=https://github.com/yourusername/helmet
+After=network.target
+Requires=network.target helmet-orchestrator.service
+
+[Service]
+Type=simple
+User=helmet
+Group=helmet
+WorkingDirectory=/opt/helmet
+Environment=HELMET_PROFILE=field
+Environment=PYTHONPATH=/opt/helmet:/opt/helmet/libs
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/helmet/venv/bin/python /opt/helmet/services/perception/perception_service.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helmet-perception
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=80%
+
+# GPU access
+SupplementaryGroups=video
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/helmet/logs /opt/helmet/models
+PrivateTmp=true
+
+[Install]
+WantedBy=helmet.target

@@ -1,0 +1,19 @@
+# Orchestrator service Docker image
+FROM helmet-base:latest
+
+# Install orchestrator-specific dependencies
+COPY services/orchestrator/requirements.txt /app/requirements-orchestrator.txt
+RUN pip install --no-cache-dir -r requirements-orchestrator.txt
+
+# Copy orchestrator service code
+COPY services/orchestrator/ /app/services/orchestrator/
+
+# Expose gRPC port
+EXPOSE 50054
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import grpc; grpc.insecure_channel('localhost:50054').get_state()" || exit 1
+
+# Run orchestrator service
+CMD ["python", "/app/services/orchestrator/orchestrator_service.py"]

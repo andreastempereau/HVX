@@ -1,0 +1,33 @@
+[Unit]
+Description=Helmet Video Service
+Documentation=https://github.com/yourusername/helmet
+After=network.target
+Requires=network.target helmet-orchestrator.service
+
+[Service]
+Type=simple
+User=helmet
+Group=helmet
+WorkingDirectory=/opt/helmet
+Environment=HELMET_PROFILE=field
+Environment=PYTHONPATH=/opt/helmet:/opt/helmet/libs
+ExecStart=/opt/helmet/venv/bin/python /opt/helmet/services/video/video_service.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helmet-video
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=50%
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/helmet/logs /opt/helmet/recordings
+PrivateTmp=true
+
+[Install]
+WantedBy=helmet.target

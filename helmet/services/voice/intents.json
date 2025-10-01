@@ -1,0 +1,231 @@
+{
+  "toggle_night_mode": {
+    "patterns": [
+      "toggle night.*mode",
+      "night.*vision",
+      "low.*light.*mode",
+      "dark.*mode",
+      "infrared.*mode"
+    ],
+    "action": "set_mode",
+    "parameters": {
+      "mode": "night"
+    },
+    "response": "Night vision mode activated"
+  },
+  "normal_mode": {
+    "patterns": [
+      "normal.*mode",
+      "default.*mode",
+      "regular.*mode",
+      "day.*mode",
+      "standard.*mode"
+    ],
+    "action": "set_mode",
+    "parameters": {
+      "mode": "normal"
+    },
+    "response": "Normal mode activated"
+  },
+  "start_recording": {
+    "patterns": [
+      "start.*record",
+      "begin.*record",
+      "record.*video",
+      "start.*capture"
+    ],
+    "action": "toggle_recording",
+    "parameters": {
+      "enabled": true
+    },
+    "response": "Recording started"
+  },
+  "stop_recording": {
+    "patterns": [
+      "stop.*record",
+      "end.*record",
+      "finish.*record",
+      "halt.*record"
+    ],
+    "action": "toggle_recording",
+    "parameters": {
+      "enabled": false
+    },
+    "response": "Recording stopped"
+  },
+  "take_screenshot": {
+    "patterns": [
+      "take.*screenshot",
+      "capture.*screen",
+      "snap.*photo",
+      "take.*picture"
+    ],
+    "action": "screenshot",
+    "parameters": {},
+    "response": "Screenshot captured"
+  },
+  "show_navigation": {
+    "patterns": [
+      "show.*nav",
+      "navigation.*mode",
+      "compass.*mode",
+      "direction.*mode"
+    ],
+    "action": "set_mode",
+    "parameters": {
+      "mode": "navigation"
+    },
+    "response": "Navigation mode activated"
+  },
+  "mark_target": {
+    "patterns": [
+      "mark.*target",
+      "tag.*object",
+      "identify.*target",
+      "highlight.*object"
+    ],
+    "action": "mark_target",
+    "parameters": {},
+    "response": "Target marked"
+  },
+  "increase_brightness": {
+    "patterns": [
+      "increase.*bright",
+      "brighter",
+      "more.*light",
+      "brighten.*display"
+    ],
+    "action": "adjust_brightness",
+    "parameters": {
+      "direction": "up"
+    },
+    "response": "Brightness increased"
+  },
+  "decrease_brightness": {
+    "patterns": [
+      "decrease.*bright",
+      "dimmer",
+      "less.*light",
+      "dim.*display"
+    ],
+    "action": "adjust_brightness",
+    "parameters": {
+      "direction": "down"
+    },
+    "response": "Brightness decreased"
+  },
+  "what_do_you_see": {
+    "patterns": [
+      "what.*see",
+      "describe.*view",
+      "what.*visible",
+      "analyze.*scene"
+    ],
+    "action": "describe_scene",
+    "parameters": {},
+    "response": "Analyzing current view"
+  },
+  "show_hud": {
+    "patterns": [
+      "show.*hud",
+      "show.*status",
+      "display.*info",
+      "system.*info"
+    ],
+    "action": "ui_command",
+    "parameters": {
+      "command": "show_hud"
+    },
+    "response": "Displaying system status"
+  },
+  "show_detections": {
+    "patterns": [
+      "show.*objects",
+      "show.*detections",
+      "highlight.*objects",
+      "scan.*area"
+    ],
+    "action": "ui_command",
+    "parameters": {
+      "command": "show_detections"
+    },
+    "response": "Showing object detection"
+  },
+  "hide_overlays": {
+    "patterns": [
+      "hide.*overlays",
+      "clear.*display",
+      "clean.*view",
+      "camera.*only"
+    ],
+    "action": "ui_command",
+    "parameters": {
+      "command": "hide_overlays"
+    },
+    "response": "Clearing display"
+  },
+  "show_crosshair": {
+    "patterns": [
+      "show.*crosshair",
+      "aiming.*mode",
+      "target.*mode",
+      "show.*center"
+    ],
+    "action": "ui_command",
+    "parameters": {
+      "command": "show_crosshair"
+    },
+    "response": "Crosshair activated"
+  },
+  "zoom_in": {
+    "patterns": [
+      "zoom.*in",
+      "magnify",
+      "closer.*look",
+      "enhance.*view"
+    ],
+    "action": "adjust_zoom",
+    "parameters": {
+      "direction": "in"
+    },
+    "response": "Zooming in"
+  },
+  "zoom_out": {
+    "patterns": [
+      "zoom.*out",
+      "wider.*view",
+      "full.*view",
+      "normal.*zoom"
+    ],
+    "action": "adjust_zoom",
+    "parameters": {
+      "direction": "out"
+    },
+    "response": "Zooming out"
+  },
+  "emergency": {
+    "patterns": [
+      "emergency",
+      "help.*needed",
+      "urgent",
+      "critical",
+      "mayday"
+    ],
+    "action": "emergency_mode",
+    "parameters": {
+      "priority": "high"
+    },
+    "response": "Emergency mode activated. Sending distress signal"
+  },
+  "system_status": {
+    "patterns": [
+      "system.*status",
+      "how.*doing",
+      "health.*check",
+      "diagnostic"
+    ],
+    "action": "system_status",
+    "parameters": {},
+    "response": "System operating normally"
+  }
+}

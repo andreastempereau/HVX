@@ -1,0 +1,28 @@
+# Perception service Docker image
+FROM helmet-base:latest
+
+# Install CUDA support (for GPU inference)
+# RUN apt-get update && apt-get install -y \
+#     nvidia-cuda-toolkit \
+#     && rm -rf /var/lib/apt/lists/*
+
+# Install perception-specific dependencies
+COPY services/perception/requirements.txt /app/requirements-perception.txt
+RUN pip install --no-cache-dir -r requirements-perception.txt
+
+# Copy perception service code
+COPY services/perception/ /app/services/perception/
+
+# Create models directory and download default model
+RUN mkdir -p /app/models
+# Note: In production, models should be mounted as volumes or downloaded at runtime
+
+# Expose gRPC port
+EXPOSE 50052
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import grpc; grpc.insecure_channel('localhost:50052').get_state()" || exit 1
+
+# Run perception service
+CMD ["python", "/app/services/perception/perception_service.py"]

@@ -1,0 +1,35 @@
+# Visor UI Docker image
+FROM helmet-base:latest
+
+# Install Qt and display dependencies
+RUN apt-get update && apt-get install -y \
+    qt6-base-dev \
+    qt6-declarative-dev \
+    qt6-multimedia-dev \
+    libqt6quick6 \
+    libqt6quickcontrols2-6 \
+    libqt6qml6 \
+    qml6-module-qtquick \
+    qml6-module-qtquick-controls \
+    qml6-module-qtquick-layouts \
+    qml6-module-qtquick-window \
+    qml6-module-qtmultimedia \
+    libgl1-mesa-dev \
+    libxkbcommon-x11-0 \
+    libfontconfig1 \
+    libxss1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install UI-specific dependencies
+COPY apps/visor-ui/requirements.txt /app/requirements-ui.txt
+RUN pip install --no-cache-dir -r requirements-ui.txt
+
+# Copy UI application code
+COPY apps/visor-ui/ /app/apps/visor-ui/
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD pgrep -f "visor-ui" || exit 1
+
+# Run visor UI
+CMD ["python", "/app/apps/visor-ui/main.py"]

@@ -1,0 +1,39 @@
+[Unit]
+Description=Helmet Visor UI
+Documentation=https://github.com/yourusername/helmet
+After=graphical-session.target helmet-video.service helmet-perception.service helmet-voice.service
+Requires=graphical-session.target
+Wants=helmet-video.service helmet-perception.service helmet-voice.service helmet-orchestrator.service
+
+[Service]
+Type=simple
+User=helmet
+Group=helmet
+WorkingDirectory=/opt/helmet
+Environment=HELMET_PROFILE=field
+Environment=PYTHONPATH=/opt/helmet:/opt/helmet/libs
+Environment=DISPLAY=:0
+Environment=QT_QPA_PLATFORM=eglfs
+ExecStart=/opt/helmet/venv/bin/python /opt/helmet/apps/visor-ui/main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=helmet-ui
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=70%
+
+# Display access
+SupplementaryGroups=video render
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/helmet/logs
+PrivateTmp=true
+
+[Install]
+WantedBy=helmet.target

@@ -1,0 +1,26 @@
+# Video service Docker image
+FROM helmet-base:latest
+
+# Install video-specific dependencies
+RUN apt-get update && apt-get install -y \
+    v4l-utils \
+    libopencv-dev \
+    python3-opencv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy video service requirements and install
+COPY services/video/requirements.txt /app/requirements-video.txt
+RUN pip install --no-cache-dir -r requirements-video.txt
+
+# Copy video service code
+COPY services/video/ /app/services/video/
+
+# Expose gRPC port
+EXPOSE 50051
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import grpc; grpc.insecure_channel('localhost:50051').get_state()" || exit 1
+
+# Run video service
+CMD ["python", "/app/services/video/video_service.py"]

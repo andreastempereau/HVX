@@ -1,0 +1,53 @@
+{
+  "video": {
+    "camera_type": "csi",
+    "csi_sensor_id": 0,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "format": "RGB"
+  },
+  "perception": {
+    "model_path": "models/yolov8n.engine",
+    "confidence_threshold": 0.6,
+    "nms_threshold": 0.4,
+    "max_detections": 50,
+    "input_size": [640, 640],
+    "device": "cuda"
+  },
+  "voice": {
+    "asr_model": "small.en",
+    "language": "en",
+    "mic_device": "hw:1,0",
+    "tts_voice": "en_US-ljspeech-medium",
+    "sample_rate": 16000
+  },
+  "ui": {
+    "fullscreen": true,
+    "dual_eye": true,
+    "lens_correction": {
+      "enabled": true,
+      "barrel_distortion": 0.15,
+      "left_offset": [-0.08, 0.0],
+      "right_offset": [0.08, 0.0]
+    },
+    "hud": {
+      "show_fps": false,
+      "show_battery": true,
+      "show_temp": true,
+      "overlay_alpha": 0.7
+    }
+  },
+  "system": {
+    "log_level": "INFO",
+    "log_dir": "/var/log/helmet",
+    "telemetry_enabled": true,
+    "recording_dir": "/home/helmet/recordings"
+  },
+  "services": {
+    "video_port": 50051,
+    "perception_port": 50052,
+    "voice_port": 50053,
+    "orchestrator_port": 50054
+  }
+}

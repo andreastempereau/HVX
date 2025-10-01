@@ -1,0 +1,54 @@
+{
+  "video": {
+    "camera_type": "webcam",
+    "camera_id": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 15,
+    "format": "RGB"
+  },
+  "perception": {
+    "model_path": "models/yolov8n.pt",
+    "confidence_threshold": 0.7,
+    "nms_threshold": 0.4,
+    "max_detections": 100,
+    "input_size": [640, 640],
+    "device": "cpu"
+  },
+  "voice": {
+    "asr_model": "small",
+    "language": "en",
+    "mic_device": "default",
+    "mic_device_index": null,
+    "tts_voice": "en_US-ljspeech-medium",
+    "sample_rate": 16000
+  },
+  "ui": {
+    "fullscreen": false,
+    "dual_eye": true,
+    "lens_correction": {
+      "enabled": true,
+      "barrel_distortion": 0.1,
+      "left_offset": [-0.05, 0.0],
+      "right_offset": [0.05, 0.0]
+    },
+    "hud": {
+      "show_fps": true,
+      "show_battery": true,
+      "show_temp": true,
+      "overlay_alpha": 0.8
+    }
+  },
+  "system": {
+    "log_level": "DEBUG",
+    "log_dir": "logs",
+    "telemetry_enabled": true,
+    "recording_dir": "recordings"
+  },
+  "services": {
+    "video_port": 50051,
+    "perception_port": 50052,
+    "voice_port": 50053,
+    "orchestrator_port": 50054
+  }
+}
