@@ -60,7 +60,10 @@ class VideoCapture:
                 if platform.system() == 'Windows':
                     self.cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
                 else:
-                    self.cap = cv2.VideoCapture(camera_id)
+                    self.cap = cv2.VideoCapture(camera_id, cv2.CAP_V4L2)
+
+                # Force MJPEG format to avoid YUYV conversion issues
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
 
             elif camera_type == 'csi':
                 # CSI camera on Jetson (production)
@@ -91,13 +94,10 @@ class VideoCapture:
 
                 # Try to set properties, but don't fail if unsupported
                 try:
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce latency
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     self.cap.set(cv2.CAP_PROP_FPS, fps)
-
-                    # Windows-specific optimizations
-                    if platform.system() == 'Windows':
-                        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce latency
 
                 except Exception as prop_error:
                     logger.warning(f"Could not set camera properties: {prop_error}")
@@ -114,10 +114,14 @@ class VideoCapture:
                 raise RuntimeError(f"Failed to open {camera_type} camera")
 
             # Test capture with retries (camera needs warm-up time)
+            # Flush initial frames from buffer
+            for _ in range(5):
+                self.cap.grab()
+
             test_success = False
-            for attempt in range(5):
+            for attempt in range(10):
                 ret, test_frame = self.cap.read()
-                if ret and test_frame is not None:
+                if ret and test_frame is not None and test_frame.size > 0:
                     logger.info(f"Video capture test successful: {test_frame.shape}")
                     test_success = True
                     break
@@ -126,7 +130,7 @@ class VideoCapture:
                     time.sleep(0.5)
 
             if not test_success:
-                logger.error("Video capture test failed after 5 attempts")
+                logger.error("Video capture test failed after 10 attempts")
                 raise RuntimeError("Unable to read frames from camera")
 
             logger.info(f"Video capture initialized successfully with {camera_type} camera")
@@ -188,8 +192,15 @@ class VideoCapture:
 
             logger.debug(f"Successfully captured frame: {frame.shape}")
 
-            # Convert BGR to RGB for consistency
-            if self.config.get('video.format', 'RGB') == 'RGB':
+            # Fix YUYV misinterpretation (camera outputs YUYV but OpenCV reads as BGR)
+            # Check if we have the YUYV problem (only green channel has data)
+            if frame[:,:,0].max() < 10 and frame[:,:,2].max() < 10 and frame[:,:,1].max() > 10:
+                logger.info("Detected YUYV format, extracting luminance channel")
+                # Extract Y (luminance) channel from green channel and convert to RGB
+                gray = frame[:,:,1]
+                frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+            elif self.config.get('video.format', 'RGB') == 'RGB':
+                # Normal BGR to RGB conversion
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # Create protobuf message
@@ -287,8 +298,13 @@ def serve():
     log_dir = Path(config.get('system.log_dir', 'logs'))
     setup_logging('video-service', log_level, log_dir)
 
-    # Create gRPC server
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    # Create gRPC server with increased message size for high-res frames
+    # 50MB max message size to handle high-resolution camera frames
+    options = [
+        ('grpc.max_send_message_length', 50 * 1024 * 1024),
+        ('grpc.max_receive_message_length', 50 * 1024 * 1024),
+    ]
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10), options=options)
     video_service = VideoServiceImpl(config)
     helmet_pb2_grpc.add_VideoServiceServicer_to_server(video_service, server)
 

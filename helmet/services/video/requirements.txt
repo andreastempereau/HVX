@@ -2,5 +2,5 @@ grpcio==1.60.0
 opencv-python==4.8.1.78
 numpy==1.24.3
 Pillow==10.1.0
-PyGObject==3.46.0  # For GStreamer Python bindings
+# PyGObject==3.46.0  # Use system PyGObject on Jetson (already installed)
 psutil==5.9.6

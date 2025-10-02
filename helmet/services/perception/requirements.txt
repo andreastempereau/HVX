@@ -1,10 +1,10 @@
 grpcio==1.60.0
 ultralytics==8.0.220
 onnxruntime==1.16.3
-onnxruntime-gpu==1.16.3  # For CUDA support
+# onnxruntime-gpu not available for ARM64 - use TensorRT or CPU
 opencv-python==4.8.1.78
 numpy==1.24.3
 Pillow==10.1.0
-torch==2.1.0
-torchvision==0.16.0
+# torch and torchvision: use NVIDIA's Jetson wheels, not PyPI
+# Install: pip3 install --no-cache https://developer.download.nvidia.com/compute/redist/jp/v60/pytorch/torch-2.4.0-cp310-cp310-linux_aarch64.whl
 psutil==5.9.6

@@ -1,174 +1,140 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 
-// MINIMAL persistent status - military style
+// Minimal persistent battery/power indicator - iOS 26 Military Glass style
 Item {
     id: minimalStatus
-    width: 140
-    height: 80
+    width: 180
+    height: 60
 
     property var statusData: ({})
 
-    // Main container
+    // Glass panel background
     Rectangle {
         anchors.fill: parent
-        color: "#0d0d0d"
-        border.color: "#555555"
-        border.width: 1
-        radius: 0
-        opacity: 0.9
+        color: "#0a0a0a"
+        opacity: 0.15
+        radius: 16
+
+        // Gradient overlay
+        Rectangle {
+            anchors.fill: parent
+            radius: parent.radius
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: "#20ffffff" }
+                GradientStop { position: 1.0; color: "#05ffffff" }
+            }
+        }
     }
 
-    Column {
+    // Glass border
+    Rectangle {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 6
-
-        // Header
-        Text {
-            text: "SYSTEM"
-            font.family: "Consolas"
-            font.pixelSize: 8
-            font.weight: Font.Bold
-            color: "#888888"
-        }
+        color: "transparent"
+        radius: 16
+        border.width: 1.5
+        border.color: "#3000ff88"
 
         Rectangle {
-            width: parent.width - 16
-            height: 1
-            color: "#333333"
+            anchors.fill: parent
+            anchors.margins: 1
+            color: "transparent"
+            radius: parent.radius - 1
+            border.width: 1
+            border.color: "#15ffffff"
         }
+    }
 
-        // Battery
-        Row {
-            visible: statusData.battery_level !== undefined
-            spacing: 6
-            width: parent.width - 16
+    // Top highlight
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.margins: 8
+        height: 1
+        radius: 0.5
+        color: "#25ffffff"
+    }
+
+    // Content
+    Row {
+        anchors.centerIn: parent
+        spacing: 16
+
+        // Power indicator
+        Column {
+            spacing: 4
+            anchors.verticalCenter: parent.verticalCenter
 
             Text {
-                text: "PWR"
-                font.family: "Consolas"
+                text: "POWER"
+                font.family: "SF Pro Display"
                 font.pixelSize: 8
-                color: "#888888"
-                width: 30
+                font.weight: 57
+                color: "#00ff88"
+                opacity: 0.6
             }
 
-            Rectangle {
-                width: 50
-                height: 10
-                border.color: "#666666"
-                border.width: 1
-                color: "#1a1a1a"
-                radius: 0
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
+            Row {
+                spacing: 6
+                Text {
+                    text: Math.round(statusData.battery_level || 87)
+                    font.family: "SF Pro Display"
+                    font.pixelSize: 22
+                    font.weight: 25
+                    color: statusData.battery_level < 20 ? "#ff3b30" : "#ffffff"
+                    opacity: 0.9
+                }
+                Text {
+                    text: "%"
+                    font.family: "SF Pro Display"
+                    font.pixelSize: 12
+                    font.weight: 25
+                    color: "#ffffff"
+                    opacity: 0.5
                     anchors.bottom: parent.bottom
-                    anchors.margins: 1
-                    width: (parent.width - 2) * (statusData.battery_level || 0) / 100
-                    color: statusData.battery_level > 20 ? "#888888" : "#555555"
+                    anchors.bottomMargin: 2
                 }
-
-                // Battery terminal
-                Rectangle {
-                    width: 2
-                    height: 6
-                    color: "#666666"
-                    anchors.right: parent.right
-                    anchors.rightMargin: -2
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            Text {
-                text: Math.round(statusData.battery_level || 0) + "%"
-                color: "#aaaaaa"
-                font.family: "Consolas"
-                font.pixelSize: 8
             }
         }
 
-        // Recording indicator
-        Row {
-            visible: statusData.recording || false
-            spacing: 6
-            width: parent.width - 16
+        // Divider
+        Rectangle {
+            width: 1
+            height: 30
+            color: "#ffffff"
+            opacity: 0.1
+            anchors.verticalCenter: parent.verticalCenter
+        }
 
-            Text {
-                text: "REC"
-                font.family: "Consolas"
-                font.pixelSize: 8
-                color: "#888888"
-                width: 30
-            }
+        // Status indicator
+        Row {
+            spacing: 6
+            anchors.verticalCenter: parent.verticalCenter
 
             Rectangle {
                 width: 6
                 height: 6
-                radius: 0
-                color: "#999999"
+                radius: 3
+                color: "#00ff88"
                 anchors.verticalCenter: parent.verticalCenter
 
                 SequentialAnimation on opacity {
-                    running: statusData.recording || false
+                    running: true
                     loops: Animation.Infinite
-                    PropertyAnimation { to: 0.3; duration: 500 }
-                    PropertyAnimation { to: 1.0; duration: 500 }
-                }
-            }
-
-            Text {
-                text: "ACTIVE"
-                font.family: "Consolas"
-                font.pixelSize: 8
-                color: "#aaaaaa"
-            }
-        }
-
-        // Service status
-        Row {
-            spacing: 6
-            width: parent.width - 16
-
-            Text {
-                text: "NET"
-                font.family: "Consolas"
-                font.pixelSize: 8
-                color: "#888888"
-                width: 30
-            }
-
-            Row {
-                spacing: 3
-
-                Rectangle {
-                    width: 4
-                    height: 4
-                    radius: 0
-                    color: "#888888"
-                }
-
-                Rectangle {
-                    width: 4
-                    height: 4
-                    radius: 0
-                    color: "#888888"
-                }
-
-                Rectangle {
-                    width: 4
-                    height: 4
-                    radius: 0
-                    color: "#888888"
+                    PropertyAnimation { to: 0.3; duration: 1500 }
+                    PropertyAnimation { to: 1.0; duration: 1500 }
                 }
             }
 
             Text {
                 text: "ONLINE"
-                font.family: "Consolas"
-                font.pixelSize: 8
-                color: "#aaaaaa"
+                font.family: "SF Pro Display"
+                font.pixelSize: 11
+                font.weight: 57
+                color: "#ffffff"
+                opacity: 0.7
+                anchors.verticalCenter: parent.verticalCenter
             }
         }
     }

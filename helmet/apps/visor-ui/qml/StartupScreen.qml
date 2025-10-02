@@ -67,7 +67,7 @@ Rectangle {
                     text: "HVX"
                     font.family: "Consolas"
                     font.pixelSize: 60
-                    font.weight: Font.Bold
+                    font.weight: 75
                     color: "#cccccc"
                     anchors.centerIn: parent
                     style: Text.Normal
@@ -76,7 +76,7 @@ Rectangle {
 
             // Subtitle
             Text {
-                text: "HELMET VISION SYSTEM v1.0.0"
+                text: "HELMET VISION SYSTEM v1.1.0"
                 font.family: "Consolas"
                 font.pixelSize: 12
                 font.letterSpacing: 2
@@ -259,36 +259,89 @@ Rectangle {
     // Simulated terminal commands
     Timer {
         id: commandTimer
-        interval: 150
+        interval: 80
         repeat: true
         running: true
         property int commandIndex: 0
         property var commands: [
             "[BOOT] HVX System initializing...",
             "[BIOS] Checking hardware compatibility... OK",
+            "[BIOS] CPU: ARM Cortex-A57 @ 1.43GHz",
+            "[BIOS] RAM: 4096 MB LPDDR4",
+            "[BIOS] GPU: NVIDIA Maxwell (128 CUDA cores)",
             "[INIT] Loading kernel modules",
             "[KERN] module: video_capture.ko loaded",
             "[KERN] module: perception_ai.ko loaded",
             "[KERN] module: voice_engine.ko loaded",
             "[KERN] module: hud_compositor.ko loaded",
+            "[KERN] module: neural_accel.ko loaded",
+            "[KERN] module: csi_camera.ko loaded",
             "[SYS ] Mounting filesystems",
-            "[SYS ] /dev/video0: OK",
+            "[SYS ] /dev/video0: CSI Camera detected",
+            "[SYS ] /dev/video1: USB Camera detected",
             "[SYS ] /dev/perception: OK",
-            "[NET ] Initializing gRPC services...",
+            "[SYS ] /dev/i2c-0: IMU sensor connected",
+            "[SYS ] /dev/i2c-1: Environmental sensors OK",
+            "[DRV ] Initializing camera drivers",
+            "[DRV ] CSI-0: IMX219 8MP sensor initialized",
+            "[DRV ] CSI-1: IMX219 8MP sensor initialized",
+            "[DRV ] Setting camera mode: 1920x1080@30fps",
+            "[DRV ] Auto-exposure enabled",
+            "[DRV ] Auto-white-balance enabled",
+            "[NET ] Initializing network stack",
+            "[NET ] gRPC service discovery starting...",
             "[NET ] localhost:50051 - video service: ONLINE",
             "[NET ] localhost:50052 - perception service: ONLINE",
             "[NET ] localhost:50053 - voice service: ONLINE",
             "[NET ] localhost:50054 - orchestrator: ONLINE",
+            "[NET ] localhost:50055 - telemetry: ONLINE",
+            "[NET ] WebSocket server: ws://0.0.0.0:8080",
             "[GPU ] Initializing display compositor",
             "[GPU ] Resolution: 1920x1080 @ 60Hz",
             "[GPU ] OpenGL 4.5 detected",
-            "[AI  ] Loading YOLOv8n model... OK",
+            "[GPU ] CUDA Toolkit 10.2 loaded",
+            "[GPU ] cuDNN 8.0.0 initialized",
+            "[GPU ] TensorRT 7.1.3 ready",
+            "[MEM ] Allocating shared memory buffers",
+            "[MEM ] Video buffer: 64 MB (ring buffer)",
+            "[MEM ] AI inference buffer: 128 MB",
+            "[MEM ] HUD composition buffer: 32 MB",
+            "[AI  ] Loading neural network models...",
+            "[AI  ] YOLOv8n object detection: loading...",
             "[AI  ] Model weights: 6.2 MB",
-            "[AI  ] Inference backend: CPU",
+            "[AI  ] Inference backend: TensorRT",
+            "[AI  ] Quantization: INT8",
+            "[AI  ] Model compiled for GPU acceleration",
+            "[AI  ] YOLOv8n: READY (avg 45ms latency)",
+            "[AI  ] Depth estimation model: loading...",
+            "[AI  ] MiDaS depth network: READY",
+            "[AUDIO] Initializing audio subsystem",
+            "[AUDIO] ALSA version 1.2.4",
+            "[AUDIO] Input device: USB Microphone Array",
+            "[AUDIO] Sample rate: 16000 Hz",
+            "[AUDIO] Channels: 1 (mono)",
+            "[AUDIO] Buffer size: 512 frames",
+            "[VOICE] Loading speech recognition engine",
+            "[VOICE] Deepgram API: connected",
+            "[VOICE] Wake word detection: active",
+            "[VOICE] Voice activity detection: enabled",
             "[HUD ] Initializing overlay widgets",
-            "[HUD ] Detection overlay: READY",
+            "[HUD ] Detection bounding boxes: READY",
+            "[HUD ] Rearview mirror widget: READY",
             "[HUD ] Status display: READY",
+            "[HUD ] Closed captions: READY",
+            "[HUD ] Snapshot analysis: READY",
+            "[CAL ] Running camera calibration",
+            "[CAL ] Intrinsic matrix computed",
+            "[CAL ] Distortion coefficients loaded",
+            "[CAL ] Stereo rectification: OK",
+            "[SAFE] Safety systems check",
+            "[SAFE] Emergency shutdown handler: armed",
+            "[SAFE] Thermal monitoring: active (CPU: 42°C)",
+            "[SAFE] Power monitor: battery 98%",
+            "[SAFE] Watchdog timer: enabled (5s timeout)",
             "[SYS ] All systems operational",
+            "[SYS ] Total boot time: 4.2 seconds",
             "[BOOT] HVX ready for deployment"
         ]
 

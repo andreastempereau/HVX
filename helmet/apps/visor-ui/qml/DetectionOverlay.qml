@@ -59,7 +59,7 @@ Item {
                     text: "TARGETS"
                     font.family: "Consolas"
                     font.pixelSize: 10
-                    font.weight: Font.Bold
+                    font.weight: 75
                     color: "#aaaaaa"
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -68,7 +68,7 @@ Item {
                     text: "[" + detections.length.toString() + "]"
                     font.family: "Consolas"
                     font.pixelSize: 10
-                    font.weight: Font.Bold
+                    font.weight: 75
                     color: "#cccccc"
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -116,7 +116,7 @@ Item {
                                 text: "×" + modelData.count
                                 font.family: "Consolas"
                                 font.pixelSize: 8
-                                font.weight: Font.Bold
+                                font.weight: 75
                                 color: "#cccccc"
                                 anchors.centerIn: parent
                             }
@@ -231,7 +231,7 @@ Item {
                     text: modelData.label.toUpperCase()
                     font.family: "Consolas"
                     font.pixelSize: 9
-                    font.weight: Font.Bold
+                    font.weight: 75
                     color: "#cccccc"
                 }
             }

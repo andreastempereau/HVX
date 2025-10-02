@@ -35,6 +35,8 @@ from video_client import VideoClient
 from perception_client import PerceptionClient
 from hud_controller import HUDController
 from voice_listener import VoiceListener
+from caption_client import CaptionClient
+from rear_camera import RearCamera
 
 import logging
 logger = logging.getLogger(__name__)
@@ -45,66 +47,132 @@ class VideoImageProvider(QQuickImageProvider):
     def __init__(self):
         super().__init__(QQuickImageProvider.Image)
         self.current_image = QImage()
+        self.lock = threading.Lock()
 
     def requestImage(self, id, size, requestedSize):
         """Provide image to QML"""
-        print(f"QML requesting image: {id}, has image: {not self.current_image.isNull()}")
-        if not self.current_image.isNull():
-            print(f"Returning image: {self.current_image.width()}x{self.current_image.height()}")
-            return self.current_image
-        else:
-            # Return empty image if no frame available
-            print("Returning empty image")
-            empty = QImage(640, 480, QImage.Format_RGB888)
-            empty.fill(0)
-            return empty
+        with self.lock:
+            if not self.current_image.isNull():
+                # Return a copy to avoid threading issues
+                return self.current_image.copy()
+            else:
+                # Return empty image if no frame available
+                empty = QImage(640, 480, QImage.Format_RGB888)
+                empty.fill(0)
+                return empty
 
     def setImage(self, image):
         """Update the current image"""
-        print(f"Setting new image: {image.width()}x{image.height()}")
-        self.current_image = image
+        with self.lock:
+            self.current_image = image
+
+class RearCameraImageProvider(QQuickImageProvider):
+    """Image provider for rear camera frames"""
+
+    def __init__(self):
+        super().__init__(QQuickImageProvider.Image)
+        self.current_image = QImage()
+        self.lock = threading.Lock()
+        self.request_count = 0
+
+    def requestImage(self, id, size, requestedSize):
+        """Provide image to QML"""
+        with self.lock:
+            self.request_count += 1
+            if self.request_count <= 3:
+                print(f"RearCameraImageProvider.requestImage called - id: {id}, has_image: {not self.current_image.isNull()}")
+                if not self.current_image.isNull():
+                    print(f"  Returning image: {self.current_image.width()}x{self.current_image.height()}, format: {self.current_image.format()}")
+
+            if not self.current_image.isNull():
+                return self.current_image.copy()
+            else:
+                # Return empty image if no frame available
+                empty = QImage(240, 180, QImage.Format_RGB888)
+                empty.fill(0)
+                if self.request_count <= 3:
+                    print(f"  Returning empty image")
+                return empty
+
+    def setImage(self, image):
+        """Update the current image"""
+        with self.lock:
+            self.current_image = image
 
 class VisorApp(QObject):
     """Main visor application controller"""
 
     # Signals for QML
     frameUpdated = Signal(str)  # Now passes image path
+    rearFrameUpdated = Signal(str)  # Rear camera frame
     detectionsUpdated = Signal('QVariantList')
     hudStatusUpdated = Signal('QVariantMap')
     snapshotAnalyzed = Signal(str, str)  # snapshot path, analysis text
     voiceCommandReceived = Signal(str)  # voice command
+    captionReceived = Signal(str, bool)  # caption text, is_final
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, image_provider=None, rear_image_provider=None):
         super().__init__()
         self.config = config
         self.video_client = None
+        self.rear_camera = None
         self.perception_client = None
         self.hud_controller = None
         self.running = False
         self.frame_counter = 0
+        self.rear_frame_counter = 0
 
         # Frame processing
         self._current_frame = None
+        self._current_rear_frame = None
         self._current_detections = []
         self._current_qimage = None
+        self._current_rear_qimage = None
+        self._shared_qimage = None
+        self.image_provider = image_provider
+        self.rear_image_provider = rear_image_provider
 
         # Voice listener
         self.voice_listener = None
 
+        # Caption client
+        self.caption_client = None
+
         # Setup components
         if self.config:
+            print("="*60)
+            print("VISOR APP INITIALIZATION")
+            print("="*60)
             self._setup_clients()
             self._setup_timers()
             self._setup_voice()
+            print("\n--- Setting up captions ---")
+            self._setup_captions()
+            print("--- Caption setup complete ---\n")
 
     def _setup_clients(self):
         """Initialize service clients"""
         try:
-            # Video client
+            # Main video client (front camera)
             video_port = self.config.get('services.video_port', 50051)
             print(f"Connecting to video service at localhost:{video_port}")
             self.video_client = VideoClient(f'localhost:{video_port}')
             print("Video client connected")
+
+            # Rear camera (IMX219 CSI camera in CAM0 slot using GStreamer directly)
+            rear_camera_sensor_id = 0  # CAM0 slot
+            try:
+                self.rear_camera = RearCamera(camera_id=rear_camera_sensor_id)
+                if self.rear_camera.start(use_gstreamer=True):
+                    print(f"Rear camera initialized (sensor-id {rear_camera_sensor_id})")
+                else:
+                    print("Rear camera not available")
+                    self.rear_camera = None
+            except Exception as e:
+                print(f"Rear camera setup failed: {e}")
+                import traceback
+                traceback.print_exc()
+                self.rear_camera = None
 
             # Perception client
             perception_port = self.config.get('services.perception_port', 50052)
@@ -128,6 +196,10 @@ class VisorApp(QObject):
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self._update_frame)
 
+        # Rear camera update timer
+        self.rear_frame_timer = QTimer()
+        self.rear_frame_timer.timeout.connect(self._update_rear_frame)
+
         # HUD update timer
         self.hud_timer = QTimer()
         self.hud_timer.timeout.connect(self._update_hud)
@@ -135,14 +207,49 @@ class VisorApp(QObject):
     def _setup_voice(self):
         """Setup voice listener"""
         try:
+            # Disabled - conflicts with Deepgram caption client
             # Get microphone device from config
-            mic_device = self.config.get('voice.mic_device_index', None)
-
-            self.voice_listener = VoiceListener(device_index=mic_device)
-            logger.info("Voice listener initialized")
+            # mic_device = self.config.get('voice.mic_device_index', None)
+            # self.voice_listener = VoiceListener(device_index=mic_device)
+            logger.info("Voice listener disabled (using Deepgram for captions)")
 
         except Exception as e:
             logger.warning(f"Voice listener not available: {e}")
+
+    def _setup_captions(self):
+        """Setup closed caption system"""
+        print("ENTERING _setup_captions()")
+        try:
+            # Get API key
+            import os as os_module
+            deepgram_key = os_module.environ.get('DEEPGRAM_API_KEY')
+
+            print(f"Deepgram key from env: {deepgram_key[:20] if deepgram_key else 'None'}...")
+            print(f"Deepgram key present: {bool(deepgram_key)}")
+
+            if not deepgram_key:
+                logger.warning("DEEPGRAM_API_KEY not set - captions disabled")
+                print("WARNING: DEEPGRAM_API_KEY not set - captions disabled")
+                return
+
+            # Get microphone device from config (use card 0 for Razer Kiyo X)
+            mic_device = self.config.get('caption.mic_device_index', 0)
+
+            print(f"Initializing caption client with mic device: {mic_device}")
+            self.caption_client = CaptionClient(
+                deepgram_api_key=deepgram_key,
+                device_index=mic_device,
+                parent_app=self  # Pass self for Qt signal access
+            )
+            logger.info("Caption client initialized")
+            print("✓ Caption client initialized successfully")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"Caption client not available: {e}")
+            print(f"ERROR: Caption client not available: {e}")
+            print("TRACEBACK:")
+            traceback.print_exc()
 
     def start(self):
         """Start the visor application"""
@@ -153,10 +260,14 @@ class VisorApp(QObject):
         self.running = True
 
         try:
-            # Start frame updates - reduce FPS for smoother display via file approach
-            target_fps = 15  # Lower FPS for better performance with file-based approach
+            # Start frame updates - using image provider for fast zero-copy updates
+            target_fps = 60  # 60 FPS for smooth video
             frame_interval = int(1000 / target_fps)
             self.frame_timer.start(frame_interval)
+
+            # Start rear camera updates (15 FPS - lower to avoid lag)
+            if self.rear_camera:
+                self.rear_frame_timer.start(66)  # ~15 FPS
 
             # Start HUD updates (lower frequency)
             print("Starting HUD timer")
@@ -166,6 +277,15 @@ class VisorApp(QObject):
             if self.voice_listener:
                 print("Starting voice listener...")
                 self.voice_listener.start(self._on_voice_command)
+
+            # Start caption client
+            print(f"Caption client object: {self.caption_client}")
+            if self.caption_client:
+                print("Starting caption client...")
+                self.caption_client.start(None)  # Callback not used, uses Qt signal instead
+                print("Caption client started!")
+            else:
+                print("WARNING: No caption client to start")
 
             print("Visor app started successfully")
             logger.info("Visor app started")
@@ -179,10 +299,17 @@ class VisorApp(QObject):
         """Stop the visor application"""
         self.running = False
         self.frame_timer.stop()
+        self.rear_frame_timer.stop()
         self.hud_timer.stop()
 
         if self.voice_listener:
             self.voice_listener.stop()
+
+        if self.caption_client:
+            self.caption_client.stop()
+
+        if self.rear_camera:
+            self.rear_camera.stop()
 
         if self.video_client:
             self.video_client.disconnect()
@@ -211,19 +338,11 @@ class VisorApp(QObject):
             self._current_frame = frame_meta
             self._current_qimage = qimage.copy()  # Store for snapshot
 
-            # Use faster JPEG format and reuse single temp file
-            import tempfile
-            import os
-
-            # Use single temp file path to avoid file system overhead
-            temp_dir = tempfile.gettempdir()
-            temp_file = os.path.join(temp_dir, "helmet_current_frame.jpg")
-
-            # Save as JPEG for better performance (smaller files, faster encoding)
-            if qimage.save(temp_file, "JPG", 85):  # 85% quality for speed
-                # Emit signal with file path + timestamp to force reload
-                file_url = f"file:///{temp_file.replace(os.sep, '/')}?t={self.frame_counter}"
-                self.frameUpdated.emit(file_url)
+            # Use image provider for zero-copy frame updates (fastest)
+            if self.image_provider:
+                self.image_provider.setImage(qimage)
+                # Emit update signal with timestamp to trigger QML refresh
+                self.frameUpdated.emit(f"image://video/{self.frame_counter}")
                 self.frame_counter += 1
 
             # Run perception inference
@@ -265,6 +384,59 @@ class VisorApp(QObject):
         thread = threading.Thread(target=run_perception)
         thread.daemon = True
         thread.start()
+
+    def _update_rear_frame(self):
+        """Update rear camera frame"""
+        if not self.running or not self.rear_camera:
+            if self.rear_frame_counter == 0:
+                print(f"Rear camera update skipped - running: {self.running}, rear_camera: {self.rear_camera}")
+            return
+
+        try:
+            # Get frame from rear camera
+            frame = self.rear_camera.get_frame()
+            if frame is None:
+                if self.rear_frame_counter == 0:
+                    print("Rear camera: no frame available")
+                return
+
+            if self.rear_frame_counter == 0:
+                print(f"Rear camera: first frame received - shape: {frame.shape}, dtype: {frame.dtype}")
+
+            # IMPORTANT: Keep numpy array alive by storing it as instance variable
+            # QImage is just a wrapper - the underlying data must persist
+            self._current_rear_frame = frame.copy()
+
+            import numpy as np
+            height, width, channels = self._current_rear_frame.shape
+            bytes_per_line = channels * width
+
+            # Create QImage pointing to our persistent numpy array
+            qimage = QImage(self._current_rear_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+
+            if qimage.isNull():
+                logger.error("Rear camera QImage is null!")
+                return
+
+            if self.rear_frame_counter == 0:
+                print(f"Rear camera: QImage created - size: {qimage.width()}x{qimage.height()}, format: {qimage.format()}")
+
+            # Use image provider for zero-copy frame updates (no temp files)
+            if self.rear_image_provider:
+                self.rear_image_provider.setImage(qimage.copy())  # Copy QImage data to image provider
+                # Emit update signal with timestamp to trigger QML refresh
+                image_path = f"image://rearcamera/{self.rear_frame_counter}"
+                if self.rear_frame_counter == 0:
+                    print(f"Rear camera: emitting signal with path: {image_path}")
+                self.rearFrameUpdated.emit(image_path)
+                self.rear_frame_counter += 1
+            else:
+                print("ERROR: No rear_image_provider!")
+
+        except Exception as e:
+            logger.error(f"Rear frame update error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _update_hud(self):
         """Update HUD status information"""
@@ -325,18 +497,32 @@ class VisorApp(QObject):
         if command == 'analyze':
             self.captureAndAnalyze()
 
+    @Slot(str, bool)
+    def _emit_caption_signal(self, text: str, is_final: bool):
+        """Thread-safe method to emit caption signal to QML"""
+        logger.debug(f"Caption: {text} (final={is_final})")
+        print(f"_emit_caption_signal called: '{text}' (final={is_final})")
+        print(f"Emitting captionReceived signal...")
+        # Emit to QML
+        self.captionReceived.emit(text, is_final)
+        print(f"Signal emitted!")
+
     @Slot()
     def captureAndAnalyze(self):
         """Capture current frame and analyze with Claude API"""
-        print("Capture and analyze triggered...")
+        print("\n" + "="*60)
+        print("=== SNAPSHOT TRIGGERED (P key pressed) ===")
+        print("="*60)
         logger.info("Capture and analyze triggered")
 
         if self._current_qimage is None:
             logger.warning("No frame available to capture")
-            print("ERROR: No frame available")
+            print("ERROR: No frame available to capture")
+            self.snapshotAnalyzed.emit("", "Error: No frame available to analyze")
             return
 
-        print("Frame available, starting analysis...")
+        print("✓ Frame available, starting analysis...")
+        print(f"✓ Frame size: {self._current_qimage.width()}x{self._current_qimage.height()}")
 
         def analyze_async():
             try:
@@ -379,12 +565,24 @@ class VisorApp(QObject):
             import anthropic
             import os
 
+            print("Checking for Anthropic API key...")
             # Get API key from environment or config
             api_key = os.environ.get('ANTHROPIC_API_KEY') or self.config.get('claude.api_key', '')
 
             if not api_key:
-                return "Error: ANTHROPIC_API_KEY not set. Set environment variable or add to config."
+                error_msg = """ANTHROPIC_API_KEY not configured.
 
+To enable AI analysis:
+1. Get API key from: https://console.anthropic.com/
+2. Set environment variable:
+   export ANTHROPIC_API_KEY=sk-ant-...
+3. Or add to .env file:
+   ANTHROPIC_API_KEY=sk-ant-...
+"""
+                print(error_msg)
+                return error_msg
+
+            print(f"API key found, calling Claude API...")
             client = anthropic.Anthropic(api_key=api_key)
 
             message = client.messages.create(
@@ -411,13 +609,26 @@ class VisorApp(QObject):
                 ],
             )
 
+            print("Claude API analysis complete!")
             return message.content[0].text
 
         except ImportError:
-            return "Error: anthropic package not installed. Run: pip install anthropic"
+            error_msg = """Anthropic package not installed.
+
+Install with:
+  pip install anthropic
+
+Or if using venv:
+  source venv/bin/activate
+  pip install anthropic
+"""
+            print(error_msg)
+            return error_msg
         except Exception as e:
             logger.error(f"Claude API error: {e}")
-            return f"Analysis error: {str(e)}"
+            error_msg = f"Analysis error: {str(e)}"
+            print(error_msg)
+            return error_msg
 
 def main():
     """Main entry point"""
@@ -436,14 +647,22 @@ def main():
 
     # Create QML engine
     engine = QQmlApplicationEngine()
+
+    # Create and register image providers for fast video frames
+    image_provider = VideoImageProvider()
+    engine.addImageProvider("video", image_provider)
+
+    rear_image_provider = RearCameraImageProvider()
+    engine.addImageProvider("rearcamera", rear_image_provider)
+
     qml_file = Path(__file__).parent / "qml" / "main.qml"
 
     if not qml_file.exists():
         logger.error(f"QML file not found: {qml_file}")
         sys.exit(1)
 
-    # Create visor app instance
-    visor_app = VisorApp(config)
+    # Create visor app instance with image providers
+    visor_app = VisorApp(config, image_provider, rear_image_provider)
 
     # Set context properties
     engine.rootContext().setContextProperty("visorApp", visor_app)

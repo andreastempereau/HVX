@@ -23,7 +23,12 @@ class VideoClient:
     def _connect(self):
         """Connect to video service"""
         try:
-            self.channel = grpc.insecure_channel(self.server_address)
+            # Create channel with increased message size for high-res frames
+            options = [
+                ('grpc.max_send_message_length', 50 * 1024 * 1024),
+                ('grpc.max_receive_message_length', 50 * 1024 * 1024),
+            ]
+            self.channel = grpc.insecure_channel(self.server_address, options=options)
             self.stub = helmet_pb2_grpc.VideoServiceStub(self.channel)
 
             # Test connection

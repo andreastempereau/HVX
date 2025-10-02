@@ -1,0 +1,43 @@
+# Jetson-specific requirements file
+# Use this instead of individual service requirements on Jetson Orin Nano
+
+# Core gRPC and protobuf
+grpcio==1.60.0
+grpcio-tools==1.60.0
+protobuf==4.25.1
+
+# Computer vision and ML
+numpy==1.24.3
+opencv-python==4.8.1.78
+Pillow==10.1.0
+
+# YOLO and object detection
+ultralytics==8.0.220
+# Note: onnxruntime-gpu not available for ARM64, use TensorRT instead
+onnxruntime==1.16.3
+
+# PyTorch for Jetson (install from NVIDIA, not pip)
+# torch and torchvision are pre-installed with JetPack
+# If not installed: pip3 install --no-cache https://developer.download.nvidia.com/compute/redist/jp/v60/pytorch/torch-2.4.0-cp310-cp310-linux_aarch64.whl
+
+# Voice/Audio
+faster-whisper==0.10.0
+# piper-tts may not work on ARM64, use pyttsx3 or festival as alternative
+# piper-tts==1.2.0
+pyaudio==0.2.13
+soundfile==0.12.1
+webrtcvad==2.0.10
+scipy==1.11.4
+# transformers - careful with version for ARM64
+transformers==4.35.2
+librosa==0.10.1
+
+# Orchestrator
+asyncio-mqtt==0.16.1
+psutil==5.9.6
+
+# UI dependencies
+PySide6==6.6.0
+
+# System utilities
+python-dotenv

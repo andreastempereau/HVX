@@ -95,6 +95,8 @@ ApplicationWindow {
                 console.log("Starting widget deployment sequence")
                 detailedHUD.deployWidgets()
                 window.widgetsDeployed = true
+                // Enable captions after startup
+                closedCaptions.enableWhenReady()
             }
         }
     }
@@ -122,6 +124,18 @@ ApplicationWindow {
     SnapshotAnalysis {
         id: snapshotAnalysis
         enabled: window.systemReady
+    }
+
+    // Closed captions widget
+    ClosedCaptions {
+        id: closedCaptions
+        enabled: window.systemReady
+    }
+
+    // Rearview mirror widget
+    RearviewMirror {
+        id: rearviewMirror
+        visible: window.systemReady
     }
 
     // Keyboard handler - invisible item that captures all keyboard input
@@ -188,6 +202,15 @@ ApplicationWindow {
             snapshotAnalysis.show(snapshotPath)
             snapshotAnalysis.setAnalysis(analysisText)
         }
+
+        function onCaptionReceived(text, isFinal) {
+            console.log("QML received caption:", text, "final:", isFinal)
+            closedCaptions.show(text, isFinal)
+        }
+
+        function onRearFrameUpdated(framePath) {
+            rearviewMirror.updateFrame(framePath)
+        }
     }
 
     // Voice command handlers
@@ -245,7 +268,9 @@ ApplicationWindow {
     }
 
     function captureAndAnalyze() {
-        console.log("QML: Capture and analyze called")
+        console.log("============================================")
+        console.log("QML: P KEY PRESSED - Capture and analyze")
+        console.log("============================================")
         // Request snapshot analysis from Python backend
         visorApp.captureAndAnalyze()
     }

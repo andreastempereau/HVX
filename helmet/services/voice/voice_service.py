@@ -12,6 +12,7 @@ import sys
 import json
 import re
 from typing import Optional, Dict, List, Any
+import numpy as np
 
 import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
