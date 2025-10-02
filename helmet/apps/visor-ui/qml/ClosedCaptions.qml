@@ -9,7 +9,7 @@ Item {
     anchors.right: parent.right
     anchors.bottomMargin: 20
     anchors.leftMargin: 40
-    anchors.rightMargin: 40
+    anchors.rightMargin: 940  // 900px snapshot width + 40px spacing
     height: 80
     visible: false
     opacity: 0

@@ -9,7 +9,7 @@ Item {
     anchors.rightMargin: 20
     anchors.bottomMargin: 20
     width: 900
-    height: 600
+    height: 350
     visible: false
     opacity: 0
     z: 2000

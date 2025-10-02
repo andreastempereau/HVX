@@ -10,7 +10,6 @@ Rectangle {
     property int loadingProgress: 0
     property string statusText: "Initializing HVX Systems..."
     property var terminalLines: []
-    property int maxTerminalLines: 25
 
     signal startupComplete()
 
@@ -76,7 +75,7 @@ Rectangle {
 
             // Subtitle
             Text {
-                text: "HELMET VISION SYSTEM v1.1.0"
+                text: "HELMET VISION SYSTEM v1.1.1"
                 font.family: "Consolas"
                 font.pixelSize: 12
                 font.letterSpacing: 2
@@ -95,7 +94,7 @@ Rectangle {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: 100
+            anchors.bottomMargin: 80
             color: "#0d0d0d"
             border.color: "#333333"
             border.width: 1
@@ -107,8 +106,10 @@ Rectangle {
                 anchors.fill: parent
                 anchors.margins: 15
                 contentHeight: terminalColumn.height
+                contentWidth: width
                 clip: true
                 flickableDirection: Flickable.VerticalFlick
+                interactive: false
 
                 Column {
                     id: terminalColumn
@@ -229,13 +230,14 @@ Rectangle {
     function addTerminalLine(line) {
         var lines = terminalLines
         lines.push(line)
-        if (lines.length > maxTerminalLines) {
-            lines.shift()
-        }
         terminalLines = lines
 
-        // Auto-scroll to bottom
-        terminalFlickable.contentY = Math.max(0, terminalColumn.height - terminalFlickable.height)
+        // Auto-scroll to bottom only when content height exceeds visible area
+        Qt.callLater(function() {
+            if (terminalFlickable.contentHeight > terminalFlickable.height) {
+                terminalFlickable.contentY = terminalFlickable.contentHeight - terminalFlickable.height
+            }
+        })
     }
 
     function completeStartup() {
