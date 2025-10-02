@@ -367,18 +367,3 @@ arecord -D hw:1,0 -f cd test.wav
 - [ ] Cloud telemetry dashboard
 - [ ] Custom training pipeline
 
-## License
-
-[Your License Here]
-
-## Contributing
-
-Contributions are welcome! Please read our contributing guidelines before submitting PRs.
-
-## Contact
-
-[Your Contact Information]
-
----
-
-**Built with care for the AR/VR community**
