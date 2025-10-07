@@ -119,52 +119,96 @@ class CaptionClient:
             dg_connection.on(LiveTranscriptionEvents.Transcript, on_message)
             dg_connection.on(LiveTranscriptionEvents.Error, on_error)
 
-            # Configure transcription options
+            # Configure transcription options - OPTIMIZED for lower latency
             options = LiveOptions(
                 model="nova-2",
                 language="en-US",
                 smart_format=True,
                 encoding="linear16",
                 channels=1,
-                sample_rate=16000,
+                sample_rate=16000,  # Will be updated to match actual audio rate
                 punctuate=True,
-                interim_results=True,
+                interim_results=True,  # Keep interim results for responsiveness
+                endpointing=300,  # Reduced from 1500ms - faster finalization
+                vad_events=True,  # Enable voice activity detection
+                utterance_end_ms=1000,  # End utterance after 1s silence (reduced from default)
             )
 
-            # Start connection
-            if await dg_connection.start(options) is False:
-                logger.error("Failed to start Deepgram connection")
-                return
+            # Start connection (will be updated with correct sample rate below)
+            logger.info("Preparing Deepgram connection...")
 
-            logger.info("Deepgram connection established")
-
-            # Setup audio stream
-            CHUNK = 1024
+            # Setup audio stream - OPTIMIZED for low latency
+            CHUNK = 512  # Smaller chunks = lower latency (reduced from 1024)
             audio = pyaudio.PyAudio()
 
             device_info = audio.get_device_info_by_index(self.device_index or 0)
             logger.info(f"Recording from: {device_info['name']}")
 
-            stream = audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=16000,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=CHUNK,
-            )
+            # Skip sample rate probing - just use 16kHz (Deepgram's preferred rate)
+            # If it fails, fall back to device default
+            supported_rate = 16000
+            device_default_rate = int(device_info.get('defaultSampleRate', 44100))
 
+            try:
+                # Try 16kHz first (optimal for Deepgram)
+                stream = audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=16000,
+                    input=True,
+                    input_device_index=self.device_index,
+                    frames_per_buffer=CHUNK,
+                )
+                supported_rate = 16000
+                logger.info(f"Using sample rate: {supported_rate}Hz")
+                print(f"Audio: Using sample rate {supported_rate}Hz")
+            except Exception as e:
+                # Fallback to device default rate
+                logger.info(f"16kHz not supported, falling back to {device_default_rate}Hz")
+                stream = audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=device_default_rate,
+                    input=True,
+                    input_device_index=self.device_index,
+                    frames_per_buffer=CHUNK,
+                )
+                supported_rate = device_default_rate
+                print(f"Audio: Using fallback sample rate {supported_rate}Hz")
+
+            # Update Deepgram options with actual sample rate
+            options.sample_rate = supported_rate
+
+            # Start Deepgram connection with correct sample rate
+            if await dg_connection.start(options) is False:
+                logger.error("Failed to start Deepgram connection")
+                stream.stop_stream()
+                stream.close()
+                audio.terminate()
+                return
+
+            logger.info(f"Deepgram connection established with {supported_rate}Hz audio")
             logger.info("Audio stream started - listening for speech...")
 
-            # Stream audio to Deepgram
+            # Stream audio to Deepgram - OPTIMIZED non-blocking
+            import concurrent.futures
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            loop = asyncio.get_event_loop()
+
             while self.is_running:
                 try:
-                    data = stream.read(CHUNK, exception_on_overflow=False)
+                    # Read audio in thread pool to avoid blocking event loop
+                    data = await loop.run_in_executor(
+                        executor,
+                        lambda: stream.read(CHUNK, exception_on_overflow=False)
+                    )
                     await dg_connection.send(data)
-                    await asyncio.sleep(0.01)
+                    # No sleep needed - executor handles blocking
                 except Exception as e:
                     logger.error(f"Error sending audio: {e}")
                     break
+
+            executor.shutdown(wait=False)
 
             # Cleanup
             stream.stop_stream()

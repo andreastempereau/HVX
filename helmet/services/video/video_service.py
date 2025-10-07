@@ -77,7 +77,7 @@ class VideoCapture:
                     f"nvarguscamerasrc sensor-id={sensor_id} ! "
                     f"video/x-raw(memory:NVMM), width={width}, height={height}, "
                     f"format=NV12, framerate={fps}/1 ! "
-                    f"nvvideoconvert flip-method=0 ! "
+                    f"nvvideoconvert flip-method=2 ! "
                     f"video/x-raw, width={width}, height={height}, format=BGRx ! "
                     f"videoconvert ! "
                     f"video/x-raw, format=BGR ! appsink max-buffers=1 drop=true"
@@ -95,6 +95,9 @@ class VideoCapture:
                 # Try to set properties, but don't fail if unsupported
                 try:
                     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce latency
+                    # Disable auto-exposure and auto-focus to reduce CPU load
+                    self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Manual mode
+                    self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Disable autofocus
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                     self.cap.set(cv2.CAP_PROP_FPS, fps)
@@ -202,6 +205,9 @@ class VideoCapture:
             elif self.config.get('video.format', 'RGB') == 'RGB':
                 # Normal BGR to RGB conversion
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Flip frame 180 degrees (upside down)
+            frame = cv2.flip(frame, -1)
 
             # Create protobuf message
             frame_meta = helmet_pb2.FrameMeta()

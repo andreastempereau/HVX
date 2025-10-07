@@ -37,6 +37,8 @@ from hud_controller import HUDController
 from voice_listener import VoiceListener
 from caption_client import CaptionClient
 from rear_camera import RearCamera
+from openai_voice_assistant import OpenAIRealtimeAssistant
+from wake_word_detector import WakeWordDetector
 
 import logging
 logger = logging.getLogger(__name__)
@@ -138,6 +140,12 @@ class VisorApp(QObject):
         # Caption client
         self.caption_client = None
 
+        # Voice assistant
+        self.voice_assistant = None
+
+        # Wake word detector
+        self.wake_word_detector = None
+
         # Setup components
         if self.config:
             print("="*60)
@@ -146,9 +154,15 @@ class VisorApp(QObject):
             self._setup_clients()
             self._setup_timers()
             self._setup_voice()
-            print("\n--- Setting up captions ---")
-            self._setup_captions()
-            print("--- Caption setup complete ---\n")
+            # print("\n--- Setting up captions ---")
+            # self._setup_captions()
+            # print("--- Caption setup complete ---\n")
+            print("\n--- Setting up wake word detector ---")
+            self._setup_wake_word()
+            print("--- Wake word detector setup complete ---\n")
+            print("\n--- Setting up voice assistant ---")
+            self._setup_assistant()
+            print("--- Voice assistant setup complete ---\n")
 
     def _setup_clients(self):
         """Initialize service clients"""
@@ -251,6 +265,85 @@ class VisorApp(QObject):
             print("TRACEBACK:")
             traceback.print_exc()
 
+    def _setup_wake_word(self):
+        """Setup wake word detector (using openWakeWord - no API key needed)"""
+        try:
+            # Get config
+            wake_word = self.config.get('assistant.wake_word', 'hey_jarvis')
+            mic_device = self.config.get('assistant.input_device_index', None)
+
+            print(f"Initializing wake word detector (openWakeWord)...")
+            print(f"  Wake word: '{wake_word}'")
+            print(f"  Mic device: {mic_device or 'default'}")
+
+            self.wake_word_detector = WakeWordDetector(
+                keywords=[wake_word],
+                device_index=mic_device
+            )
+            logger.info("Wake word detector initialized")
+            print("✓ Wake word detector initialized successfully")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"Wake word detector not available: {e}")
+            print(f"ERROR: Wake word detector not available: {e}")
+            traceback.print_exc()
+
+    def _setup_assistant(self):
+        """Setup OpenAI Realtime voice assistant"""
+        try:
+            # Get API key
+            import os as os_module
+            openai_key = os_module.environ.get('OPENAI_API_KEY')
+
+            if not openai_key:
+                logger.warning("OPENAI_API_KEY not set - voice assistant disabled")
+                print("WARNING: OPENAI_API_KEY not set - voice assistant disabled")
+                return
+
+            # Get config
+            voice = self.config.get('assistant.voice', 'alloy')  # alloy, echo, fable, onyx, nova, shimmer
+            input_device = self.config.get('assistant.input_device_index', None)
+            output_device = self.config.get('assistant.output_device_index', None)
+            system_prompt = self.config.get('assistant.system_prompt',
+                "You are a helpful AI assistant integrated into an AR helmet. Provide concise, clear responses suitable for voice interaction.")
+
+            print(f"Initializing OpenAI Realtime voice assistant...")
+            print(f"  Voice: {voice}")
+            print(f"  Input device: {input_device or 'default'}")
+            print(f"  Output device: {output_device or 'default'}")
+            print(f"  System prompt: {system_prompt[:50]}...")
+
+            self.voice_assistant = OpenAIRealtimeAssistant(
+                openai_api_key=openai_key,
+                system_prompt=system_prompt,
+                voice=voice,
+                input_device_index=input_device,
+                output_device_index=output_device,
+                wake_word_detector=self.wake_word_detector,  # Pass wake word detector reference
+                frame_getter=self.get_current_camera_frame  # Pass frame getter for on-demand vision
+            )
+            logger.info("OpenAI Realtime voice assistant initialized")
+            print("✓ OpenAI Realtime voice assistant initialized successfully")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"Voice assistant not available: {e}")
+            print(f"ERROR: Voice assistant not available: {e}")
+            traceback.print_exc()
+
+    def _on_wake_word_detected(self, keyword: str):
+        """Handle wake word detection"""
+        logger.info(f"Wake word detected: {keyword}")
+        print(f"\n🎤 Wake word '{keyword}' detected! Activating assistant...")
+
+        # Wake word detector has released the microphone
+        # Now activate voice assistant (it will open the mic)
+        if self.voice_assistant:
+            self.voice_assistant.activate()
+
+        # Note: wake_word_detector.resume() will be called when assistant deactivates
+
     def start(self):
         """Start the visor application"""
         if self.running:
@@ -261,13 +354,13 @@ class VisorApp(QObject):
 
         try:
             # Start frame updates - using image provider for fast zero-copy updates
-            target_fps = 60  # 60 FPS for smooth video
+            target_fps = 30  # 30 FPS for balanced performance
             frame_interval = int(1000 / target_fps)
             self.frame_timer.start(frame_interval)
 
-            # Start rear camera updates (15 FPS - lower to avoid lag)
+            # Start rear camera updates (10 FPS - lower to avoid lag)
             if self.rear_camera:
-                self.rear_frame_timer.start(66)  # ~15 FPS
+                self.rear_frame_timer.start(100)  # 10 FPS
 
             # Start HUD updates (lower frequency)
             print("Starting HUD timer")
@@ -278,14 +371,30 @@ class VisorApp(QObject):
                 print("Starting voice listener...")
                 self.voice_listener.start(self._on_voice_command)
 
-            # Start caption client
-            print(f"Caption client object: {self.caption_client}")
-            if self.caption_client:
-                print("Starting caption client...")
-                self.caption_client.start(None)  # Callback not used, uses Qt signal instead
-                print("Caption client started!")
+            # Start caption client (DISABLED)
+            # print(f"Caption client object: {self.caption_client}")
+            # if self.caption_client:
+            #     print("Starting caption client...")
+            #     self.caption_client.start(None)  # Callback not used, uses Qt signal instead
+            #     print("Caption client started!")
+            # else:
+            #     print("WARNING: No caption client to start")
+
+            # Start wake word detector
+            if self.wake_word_detector:
+                print("Starting wake word detector...")
+                self.wake_word_detector.start(self._on_wake_word_detected)
+                print("Wake word detector started!")
             else:
-                print("WARNING: No caption client to start")
+                print("WARNING: No wake word detector to start")
+
+            # Start voice assistant
+            if self.voice_assistant:
+                print("Starting voice assistant...")
+                self.voice_assistant.start()
+                print("Voice assistant started!")
+            else:
+                print("WARNING: No voice assistant to start")
 
             print("Visor app started successfully")
             logger.info("Visor app started")
@@ -307,6 +416,12 @@ class VisorApp(QObject):
 
         if self.caption_client:
             self.caption_client.stop()
+
+        if self.wake_word_detector:
+            self.wake_word_detector.stop()
+
+        if self.voice_assistant:
+            self.voice_assistant.stop()
 
         if self.rear_camera:
             self.rear_camera.stop()
@@ -336,7 +451,7 @@ class VisorApp(QObject):
                 return
 
             self._current_frame = frame_meta
-            self._current_qimage = qimage.copy()  # Store for snapshot
+            self._current_qimage = qimage.copy()  # Store for snapshot (used for snapshots and on-demand vision)
 
             # Use image provider for zero-copy frame updates (fastest)
             if self.image_provider:
@@ -345,9 +460,9 @@ class VisorApp(QObject):
                 self.frameUpdated.emit(f"image://video/{self.frame_counter}")
                 self.frame_counter += 1
 
-            # Run perception inference
-            if self.perception_client:
-                self._run_perception_async(frame_meta)
+            # Run perception inference (DISABLED - high CPU usage)
+            # if self.perception_client:
+            #     self._run_perception_async(frame_meta)
 
         except Exception as e:
             print(f"Frame update error: {e}")
@@ -506,6 +621,40 @@ class VisorApp(QObject):
         # Emit to QML
         self.captionReceived.emit(text, is_final)
         print(f"Signal emitted!")
+
+        # Send final captions to voice assistant (DISABLED - no caption system)
+        # if is_final and self.voice_assistant and len(text.strip()) > 0:
+        #     text_lower = text.lower()
+        #     wake_word = self.config.get('assistant.wake_word', 'bart').lower()
+
+        #     # Check if assistant is already active
+        #     if self.voice_assistant.is_active:
+        #         # Already active - send all final captions directly
+        #         print(f"[Assistant Active] Processing: '{text}'")
+        #         self.voice_assistant.process_transcript(text)
+        #     elif wake_word in text_lower:
+        #         # Wake word detected - activate and process
+        #         wake_word_index = text_lower.find(wake_word)
+        #         if wake_word_index != -1:
+        #             # Activate assistant
+        #             self.voice_assistant.activate()
+
+        #             # Get text after wake word
+        #             command = text[wake_word_index + len(wake_word):].strip()
+
+        #             if len(command) > 0:
+        #                 print(f"Wake word '{wake_word}' detected! Command: '{command}'")
+        #                 self.voice_assistant.process_transcript(command)
+        #             else:
+        #                 # Just the wake word, acknowledge
+        #                 print(f"Wake word '{wake_word}' detected with no command")
+        #                 self.voice_assistant.process_transcript("Yes?")
+        #     else:
+        #         print(f"No wake word detected in: '{text}'")
+
+    def get_current_camera_frame(self):
+        """Get current camera frame QImage (for on-demand vision queries)"""
+        return self._current_qimage
 
     @Slot()
     def captureAndAnalyze(self):

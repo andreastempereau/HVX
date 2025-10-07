@@ -25,8 +25,8 @@ class RearCamera:
         self.thread = None
         self.current_frame = None
         self.frame_lock = threading.Lock()
-        self.width = 1280
-        self.height = 720
+        self.width = 720
+        self.height = 1280
 
     def start(self, use_gstreamer=True):
         """Start camera capture using GStreamer"""
@@ -37,8 +37,8 @@ class RearCamera:
             # Build GStreamer pipeline for Jetson CSI camera
             pipeline_str = (
                 f"nvarguscamerasrc sensor-id={self.camera_id} ! "
-                f"video/x-raw(memory:NVMM), width=1920, height=1080, format=NV12, framerate=30/1 ! "
-                f"nvvidconv ! "
+                f"video/x-raw(memory:NVMM), width=1280, height=720, format=NV12, framerate=10/1 ! "
+                f"nvvidconv flip-method=3 ! "
                 f"video/x-raw, width={self.width}, height={self.height}, format=BGRx ! "
                 f"videoconvert ! "
                 f"video/x-raw, format=BGR ! "
