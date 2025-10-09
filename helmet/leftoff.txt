@@ -1,0 +1,24 @@
+[Wake Word] Frame 125: hey_jarvis_v0.1: 0.001 | Audio level: 310
+[Wake Word] Frame 150: hey_jarvis_v0.1: 0.000 | Audio level: 3187
+
+🎤 [Wake Word] DETECTED: 'hey_jarvis_v0.1' (confidence: 1.00)
+
+[Wake Word] Pausing - releasing microphone...
+
+🎤 Wake word 'hey_jarvis_v0.1' detected! Activating assistant...
+[OpenAI Assistant] Initializing audio streams...
+Expression 'paInvalidSampleRate' failed in 'src/hostapi/alsa/pa_linux_alsa.c', line: 2048
+Expression 'PaAlsaStreamComponent_InitialConfigure( &self->capture, inParams, self->primeBuffers, hwParamsCapture, &realSr )' failed in 'src/hostapi/alsa/pa_linux_alsa.c', line: 2718
+Expression 'PaAlsaStream_Configure( stream, inputParameters, outputParameters, sampleRate, framesPerBuffer, &inputLatency, &outputLatency, &hostBufferSizeMode )' failed in 'src/hostapi/alsa/pa_linux_alsa.c', line: 2842
+[OpenAI Audio] Input: 48000Hz (resample=True)
+[OpenAI Audio] Output: 24000Hz (resample=False)
+[OpenAI Audio] Streams initialized
+[OpenAI Assistant] Activated - now listening continuously
+[OpenAI] Sending greeting...
+[OpenAI] Response started - blocking microphone input
+[OpenAI] Response complete - microphone listening resumed
+[OpenAI] Response started - blocking microphone input
+[OpenAI] Response complete - microphone listening resumed
+[User Transcript]: 시청해 주셔서 감사합니다.
+[OpenAI] Response complete - microphone listening resumed
+[User Transcript]: hey jarvis.

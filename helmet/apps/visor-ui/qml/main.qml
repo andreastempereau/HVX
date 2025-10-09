@@ -16,6 +16,7 @@ ApplicationWindow {
 
     property bool systemReady: false
     property bool widgetsDeployed: false
+    property int orientationUpdateCount: 0
 
     // Main content - fullscreen video
     Rectangle {
@@ -44,7 +45,7 @@ ApplicationWindow {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 10
-        visible: window.systemReady
+        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
     }
 
     // Startup screen - shown initially
@@ -64,8 +65,8 @@ ApplicationWindow {
     HUDOverlay {
         id: detailedHUD
         anchors.fill: parent
-        visible: window.systemReady
-        opacity: window.systemReady && window.widgetsDeployed ? 0.8 : 0
+        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
+        opacity: window.systemReady && window.widgetsDeployed && currentHUDPreset !== 1 ? 0.8 : 0
         enabled: window.systemReady
 
         // Widget deployment properties
@@ -99,6 +100,7 @@ ApplicationWindow {
                 closedCaptions.enableWhenReady()
             }
         }
+
     }
 
     // Voice feedback overlay (appears during voice interaction)
@@ -135,8 +137,31 @@ ApplicationWindow {
     // Rearview mirror widget
     RearviewMirror {
         id: rearviewMirror
-        visible: window.systemReady
+        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
     }
+
+    // Orientation crosshair
+    OrientationCrosshair {
+        id: orientationCrosshair
+        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
+        z: 100  // Above video but below overlays
+    }
+
+    // HUD Preset Wheel (always enabled, even in clear mode)
+    HUDPresetWheel {
+        id: hudPresetWheel
+        z: 1000  // On top of everything
+        enabled: true  // Always active so you can switch out of clear mode
+
+        onPresetChanged: function(presetIndex) {
+            console.log("HUD Preset changed to:", presetIndex)
+            window.currentHUDPreset = presetIndex
+        }
+    }
+
+    // Track current HUD preset
+    property int currentHUDPreset: 0  // 0=full, 1=clear, 2=custom
+
 
     // Keyboard handler - invisible item that captures all keyboard input
     Item {
@@ -146,7 +171,6 @@ ApplicationWindow {
         z: 10000
 
         Keys.onPressed: function(event) {
-            console.log("Key pressed:", event.key)
             switch (event.key) {
                 case Qt.Key_Escape:
                     Qt.quit()
@@ -210,6 +234,19 @@ ApplicationWindow {
 
         function onRearFrameUpdated(framePath) {
             rearviewMirror.updateFrame(framePath)
+        }
+
+        function onOrientationUpdated(headingAngle, rollAngle, pitchAngle) {
+            if (orientationUpdateCount < 5) {
+                console.log("QML received orientation: heading=" + headingAngle.toFixed(2) + "°, roll=" + rollAngle.toFixed(2) + "°, pitch=" + pitchAngle.toFixed(2) + "°")
+                orientationUpdateCount++
+            }
+            orientationCrosshair.headingAngle = headingAngle
+            orientationCrosshair.rollAngle = rollAngle
+            orientationCrosshair.pitchAngle = pitchAngle
+
+            // Update preset wheel with orientation (pass heading, roll, pitch)
+            hudPresetWheel.updateOrientation(headingAngle, rollAngle, pitchAngle)
         }
     }
 

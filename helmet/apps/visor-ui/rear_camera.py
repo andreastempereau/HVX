@@ -35,14 +35,15 @@ class RearCamera:
 
         try:
             # Build GStreamer pipeline for Jetson CSI camera
+            # Optimized for low memory usage: smaller resolution, lower framerate, minimal buffering
             pipeline_str = (
                 f"nvarguscamerasrc sensor-id={self.camera_id} ! "
-                f"video/x-raw(memory:NVMM), width=1280, height=720, format=NV12, framerate=10/1 ! "
+                f"video/x-raw(memory:NVMM), width=640, height=480, format=NV12, framerate=5/1 ! "
                 f"nvvidconv flip-method=3 ! "
                 f"video/x-raw, width={self.width}, height={self.height}, format=BGRx ! "
                 f"videoconvert ! "
                 f"video/x-raw, format=BGR ! "
-                f"appsink name=sink emit-signals=true max-buffers=1 drop=true"
+                f"appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false"
             )
 
             print(f"Starting rear camera with GStreamer pipeline:")

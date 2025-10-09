@@ -2,7 +2,8 @@
 
 import psutil
 import logging
-from typing import Dict, Any
+import time
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -10,20 +11,40 @@ logger = logging.getLogger(__name__)
 class HUDController:
     """Controller for HUD status and telemetry"""
 
-    def __init__(self, config):
+    def __init__(self, config, system_monitor=None):
         self.config = config
         self.frame_count = 0
         self.last_fps_time = 0
         self.current_fps = 0
 
+        # FPS tracking
+        self.fps_window = []  # Rolling window of frame times
+        self.fps_window_size = 30  # Track last 30 frames
+        self.last_frame_time = time.time()
+
+        # System monitor (optional - provides real telemetry)
+        self.system_monitor = system_monitor
+
     def get_status(self) -> Dict[str, Any]:
         """Get current system status for HUD display"""
         try:
+            # Get telemetry from system monitor if available
+            if self.system_monitor:
+                telemetry = self.system_monitor.get_telemetry()
+                cpu_usage = telemetry['cpu_usage']
+                memory_usage = telemetry['ram_usage']
+                temperature = telemetry['cpu_temp']
+            else:
+                # Fallback to psutil
+                cpu_usage = self._get_cpu_usage()
+                memory_usage = self._get_memory_usage()
+                temperature = self._get_temperature()
+
             status = {
                 # System metrics
-                'cpu_usage': self._get_cpu_usage(),
-                'memory_usage': self._get_memory_usage(),
-                'temperature': self._get_temperature(),
+                'cpu_usage': cpu_usage,
+                'memory_usage': memory_usage,
+                'temperature': temperature,
                 'battery_level': self._get_battery_level(),
 
                 # Application metrics
@@ -110,6 +131,31 @@ class HUDController:
     def update_fps(self, fps: float):
         """Update FPS counter"""
         self.current_fps = fps
+
+    def record_frame(self):
+        """
+        Record a frame for FPS calculation
+
+        Call this each time a frame is rendered to track actual FPS
+        """
+        current_time = time.time()
+        frame_time = current_time - self.last_frame_time
+        self.last_frame_time = current_time
+
+        # Add to rolling window
+        self.fps_window.append(frame_time)
+        if len(self.fps_window) > self.fps_window_size:
+            self.fps_window.pop(0)
+
+        # Calculate FPS from average frame time
+        if len(self.fps_window) > 0:
+            avg_frame_time = sum(self.fps_window) / len(self.fps_window)
+            if avg_frame_time > 0:
+                self.current_fps = round(1.0 / avg_frame_time, 1)
+            else:
+                self.current_fps = 0
+
+        self.frame_count += 1
 
     def update_detection_count(self, count: int):
         """Update detection count"""

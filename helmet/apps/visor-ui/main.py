@@ -39,6 +39,9 @@ from caption_client import CaptionClient
 from rear_camera import RearCamera
 from openai_voice_assistant import OpenAIRealtimeAssistant
 from wake_word_detector import WakeWordDetector
+from gyro_sensor import GyroSensor
+from system_monitor import SystemMonitor
+from full_recorder import FullRecorder
 
 import logging
 logger = logging.getLogger(__name__)
@@ -112,8 +115,9 @@ class VisorApp(QObject):
     snapshotAnalyzed = Signal(str, str)  # snapshot path, analysis text
     voiceCommandReceived = Signal(str)  # voice command
     captionReceived = Signal(str, bool)  # caption text, is_final
+    orientationUpdated = Signal(float, float, float)  # heading, roll, pitch angles
 
-    def __init__(self, config=None, image_provider=None, rear_image_provider=None):
+    def __init__(self, config=None, image_provider=None, rear_image_provider=None, qml_window=None):
         super().__init__()
         self.config = config
         self.video_client = None
@@ -123,6 +127,7 @@ class VisorApp(QObject):
         self.running = False
         self.frame_counter = 0
         self.rear_frame_counter = 0
+        self.qml_window = qml_window  # Reference to QML window for screen capture
 
         # Frame processing
         self._current_frame = None
@@ -146,11 +151,26 @@ class VisorApp(QObject):
         # Wake word detector
         self.wake_word_detector = None
 
+        # Gyroscope sensor
+        self.gyro_sensor = None
+
+        # System monitor
+        self.system_monitor = None
+
+        # Video recorder
+        self.video_recorder = None
+
         # Setup components
         if self.config:
             print("="*60)
             print("VISOR APP INITIALIZATION")
             print("="*60)
+            print("\n--- Setting up system monitor ---")
+            self._setup_system_monitor()
+            print("--- System monitor setup complete ---\n")
+            print("\n--- Setting up video recorder ---")
+            self._setup_video_recorder()
+            print("--- Video recorder setup complete ---\n")
             self._setup_clients()
             self._setup_timers()
             self._setup_voice()
@@ -163,6 +183,9 @@ class VisorApp(QObject):
             print("\n--- Setting up voice assistant ---")
             self._setup_assistant()
             print("--- Voice assistant setup complete ---\n")
+            print("\n--- Setting up gyroscope sensor ---")
+            self._setup_gyro()
+            print("--- Gyroscope sensor setup complete ---\n")
 
     def _setup_clients(self):
         """Initialize service clients"""
@@ -194,8 +217,8 @@ class VisorApp(QObject):
             self.perception_client = PerceptionClient(f'localhost:{perception_port}')
             print("Perception client connected")
 
-            # HUD controller
-            self.hud_controller = HUDController(self.config)
+            # HUD controller (pass system monitor for real telemetry)
+            self.hud_controller = HUDController(self.config, system_monitor=self.system_monitor)
             print("HUD controller initialized")
 
             logger.info("Service clients initialized")
@@ -305,6 +328,7 @@ class VisorApp(QObject):
             voice = self.config.get('assistant.voice', 'alloy')  # alloy, echo, fable, onyx, nova, shimmer
             input_device = self.config.get('assistant.input_device_index', None)
             output_device = self.config.get('assistant.output_device_index', None)
+            output_volume = self.config.get('assistant.output_volume', 1.0)
             system_prompt = self.config.get('assistant.system_prompt',
                 "You are a helpful AI assistant integrated into an AR helmet. Provide concise, clear responses suitable for voice interaction.")
 
@@ -312,6 +336,7 @@ class VisorApp(QObject):
             print(f"  Voice: {voice}")
             print(f"  Input device: {input_device or 'default'}")
             print(f"  Output device: {output_device or 'default'}")
+            print(f"  Output volume: {output_volume}")
             print(f"  System prompt: {system_prompt[:50]}...")
 
             self.voice_assistant = OpenAIRealtimeAssistant(
@@ -320,8 +345,11 @@ class VisorApp(QObject):
                 voice=voice,
                 input_device_index=input_device,
                 output_device_index=output_device,
+                output_volume=output_volume,
                 wake_word_detector=self.wake_word_detector,  # Pass wake word detector reference
-                frame_getter=self.get_current_camera_frame  # Pass frame getter for on-demand vision
+                frame_getter=self.get_current_camera_frame,  # Pass frame getter for on-demand vision
+                system_monitor=self.system_monitor,  # Pass system monitor for telemetry
+                video_recorder=self.video_recorder  # Pass video recorder for recording control
             )
             logger.info("OpenAI Realtime voice assistant initialized")
             print("✓ OpenAI Realtime voice assistant initialized successfully")
@@ -331,6 +359,110 @@ class VisorApp(QObject):
             logger.warning(f"Voice assistant not available: {e}")
             print(f"ERROR: Voice assistant not available: {e}")
             traceback.print_exc()
+
+    def _setup_gyro(self):
+        """Setup gyroscope sensor"""
+        try:
+            # Get I2C bus from config (default 7, where we detected the BNO055)
+            i2c_bus = self.config.get('gyro.i2c_bus', 7)
+
+            print(f"Initializing gyroscope sensor on I2C bus {i2c_bus}...")
+
+            self.gyro_sensor = GyroSensor(i2c_bus=i2c_bus)
+            logger.info("Gyroscope sensor initialized")
+            print("✓ Gyroscope sensor initialized successfully")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"Gyroscope sensor not available: {e}")
+            print(f"ERROR: Gyroscope sensor not available: {e}")
+            traceback.print_exc()
+
+    def _setup_system_monitor(self):
+        """Setup system telemetry monitor"""
+        try:
+            print(f"Initializing system monitor...")
+
+            self.system_monitor = SystemMonitor()
+            logger.info("System monitor initialized")
+            print("✓ System monitor initialized successfully")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"System monitor not available: {e}")
+            print(f"ERROR: System monitor not available: {e}")
+            traceback.print_exc()
+
+    def _setup_video_recorder(self):
+        """Setup full recorder (video + widgets + audio)"""
+        try:
+            # Get recording directory from config
+            recording_dir = self.config.get('system.recording_dir', 'recordings')
+            mic_device = self.config.get('assistant.input_device_index', None)
+
+            print(f"Initializing full recorder (video + audio)...")
+            print(f"  Output directory: {recording_dir}")
+            print(f"  Microphone device: {mic_device or 'default'}")
+
+            self.video_recorder = FullRecorder(
+                output_dir=recording_dir,
+                fps=30,
+                mic_device_index=mic_device,
+                enable_audio=True
+            )
+
+            # Set up callbacks
+            def on_recording_started(filename, duration):
+                logger.info(f"Recording started: {filename}")
+                print(f"🔴 Recording started: {filename}")
+
+            def on_recording_stopped(filename, frames, duration):
+                logger.info(f"Recording saved: {filename} ({frames} frames, {duration:.1f}s)")
+                print(f"⏹ Recording saved: {filename} ({frames} frames, {duration:.1f}s)")
+
+            self.video_recorder.on_recording_started = on_recording_started
+            self.video_recorder.on_recording_stopped = on_recording_stopped
+
+            logger.info("Video recorder initialized")
+            print("✓ Video recorder initialized successfully")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"Video recorder not available: {e}")
+            print(f"ERROR: Video recorder not available: {e}")
+            traceback.print_exc()
+
+    @Slot(float, float, float)
+    def _emit_orientation_signal(self, heading: float, roll: float, pitch: float):
+        """Thread-safe method to emit orientation signal to QML"""
+        # Debug: print first few updates
+        if not hasattr(self, '_orientation_debug_count'):
+            self._orientation_debug_count = 0
+
+        if self._orientation_debug_count < 5:
+            print(f"Orientation update: heading={heading:.2f}°, roll={roll:.2f}°, pitch={pitch:.2f}°")
+            self._orientation_debug_count += 1
+
+        # Emit to QML
+        self.orientationUpdated.emit(heading, roll, pitch)
+
+    def _on_orientation_update(self, orientation_data: dict):
+        """Handle orientation updates from gyroscope (called from sensor thread)"""
+        # Extract all euler angles
+        heading = orientation_data['euler'][0] or 0.0  # Heading/yaw is index 0
+        roll = orientation_data['euler'][1] or 0.0  # Roll is index 1
+        pitch = orientation_data['euler'][2] or 0.0  # Pitch is index 2
+
+        # Use QMetaObject.invokeMethod for thread-safe signal emission
+        from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+        QMetaObject.invokeMethod(
+            self,
+            "_emit_orientation_signal",
+            Qt.QueuedConnection,
+            Q_ARG(float, heading),
+            Q_ARG(float, roll),
+            Q_ARG(float, pitch)
+        )
 
     def _on_wake_word_detected(self, keyword: str):
         """Handle wake word detection"""
@@ -396,6 +528,22 @@ class VisorApp(QObject):
             else:
                 print("WARNING: No voice assistant to start")
 
+            # Start gyroscope sensor (60 Hz update rate for smooth tracking)
+            if self.gyro_sensor:
+                print("Starting gyroscope sensor...")
+                self.gyro_sensor.start(callback=self._on_orientation_update, rate_hz=60)
+                print("Gyroscope sensor started!")
+            else:
+                print("WARNING: No gyroscope sensor to start")
+
+            # Start system monitor
+            if self.system_monitor:
+                print("Starting system monitor...")
+                self.system_monitor.start()
+                print("System monitor started!")
+            else:
+                print("WARNING: No system monitor to start")
+
             print("Visor app started successfully")
             logger.info("Visor app started")
 
@@ -423,6 +571,15 @@ class VisorApp(QObject):
         if self.voice_assistant:
             self.voice_assistant.stop()
 
+        if self.gyro_sensor:
+            self.gyro_sensor.stop()
+
+        if self.system_monitor:
+            self.system_monitor.stop()
+
+        if self.video_recorder and self.video_recorder.is_recording_active():
+            self.video_recorder.stop_recording()
+
         if self.rear_camera:
             self.rear_camera.stop()
 
@@ -440,6 +597,10 @@ class VisorApp(QObject):
             return
 
         try:
+            # Record frame for FPS tracking
+            if self.hud_controller:
+                self.hud_controller.record_frame()
+
             # Get frame from video service
             frame_meta = self.video_client.get_frame()
             if frame_meta is None:
@@ -452,6 +613,32 @@ class VisorApp(QObject):
 
             self._current_frame = frame_meta
             self._current_qimage = qimage.copy()  # Store for snapshot (used for snapshots and on-demand vision)
+
+            # Add frame to full recorder if recording (capture full screen with widgets)
+            if self.video_recorder and self.video_recorder.is_recording_active():
+                # Capture the full QML window (includes camera feed + all widgets/overlays)
+                if self.qml_window:
+                    try:
+                        # Grab the QML window framebuffer
+                        qml_image = self.qml_window.grabWindow()
+                        if not qml_image.isNull():
+                            # Convert QImage to numpy array
+                            import numpy as np
+                            width = qml_image.width()
+                            height = qml_image.height()
+
+                            # Convert to RGB888 format if needed
+                            if qml_image.format() != QImage.Format_RGB888:
+                                qml_image = qml_image.convertToFormat(QImage.Format_RGB888)
+
+                            # Get pointer to image data
+                            ptr = qml_image.constBits()
+                            frame_array = np.array(ptr).reshape((height, width, 3))
+
+                            # Add full screen capture (with widgets) to recorder
+                            self.video_recorder.add_frame(frame_array)
+                    except Exception as e:
+                        logger.error(f"Error capturing QML window: {e}")
 
             # Use image provider for zero-copy frame updates (fastest)
             if self.image_provider:
@@ -810,11 +997,7 @@ def main():
         logger.error(f"QML file not found: {qml_file}")
         sys.exit(1)
 
-    # Create visor app instance with image providers
-    visor_app = VisorApp(config, image_provider, rear_image_provider)
-
-    # Set context properties
-    engine.rootContext().setContextProperty("visorApp", visor_app)
+    # Set context properties (must be done before creating VisorApp which uses config)
     engine.rootContext().setContextProperty("config", config.all)
 
     # Load QML with absolute path
@@ -825,6 +1008,15 @@ def main():
     if not engine.rootObjects():
         logger.error("Failed to load QML file")
         sys.exit(1)
+
+    # Get QML window for screen capture
+    qml_window = engine.rootObjects()[0]
+
+    # Create visor app instance with image providers AND QML window reference
+    visor_app = VisorApp(config, image_provider, rear_image_provider, qml_window)
+
+    # Set visor app as context property (must be after creation)
+    engine.rootContext().setContextProperty("visorApp", visor_app)
 
     # Start visor app
     visor_app.start()
