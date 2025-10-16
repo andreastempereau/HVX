@@ -957,11 +957,11 @@ class OpenAIRealtimeAssistant:
                         raise
                     continue
 
-            # Output stream (speakers) - try 24kHz first, fallback to 48kHz/44100Hz
-            self.output_native_rate = 24000
-            self.needs_output_resampling = False
+            # Output stream (speakers) - try 44.1kHz first (most compatible), then 48kHz, then 24kHz
+            self.output_native_rate = 44100
+            self.needs_output_resampling = True
 
-            for test_rate in [24000, 48000, 44100]:
+            for test_rate in [44100, 48000, 24000]:
                 try:
                     self.output_stream = self.audio.open(
                         format=pyaudio.paInt16,
@@ -1059,6 +1059,7 @@ class OpenAIRealtimeAssistant:
                 # Get audio from queue (non-blocking)
                 try:
                     audio_data = self.audio_queue.get_nowait()
+                    print(f"[Audio Play] Got {len(audio_data)} bytes from queue, output_stream={self.output_stream is not None}")
 
                     if self.output_stream:
                         # Convert to numpy for processing
@@ -1077,11 +1078,13 @@ class OpenAIRealtimeAssistant:
 
                         # Run blocking write in executor to avoid blocking event loop
                         loop = asyncio.get_event_loop()
+                        print(f"[Audio Play] Writing {len(audio_data)} bytes to speaker...")
                         await loop.run_in_executor(
                             executor,
                             self.output_stream.write,
                             audio_data
                         )
+                        print(f"[Audio Play] Write complete")
                 except queue.Empty:
                     await asyncio.sleep(0.01)
             except Exception as e:

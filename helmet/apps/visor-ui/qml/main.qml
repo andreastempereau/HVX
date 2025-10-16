@@ -134,12 +134,6 @@ ApplicationWindow {
         enabled: window.systemReady
     }
 
-    // Rearview mirror widget
-    RearviewMirror {
-        id: rearviewMirror
-        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
-    }
-
     // Orientation crosshair
     OrientationCrosshair {
         id: orientationCrosshair
@@ -230,10 +224,6 @@ ApplicationWindow {
         function onCaptionReceived(text, isFinal) {
             console.log("QML received caption:", text, "final:", isFinal)
             closedCaptions.show(text, isFinal)
-        }
-
-        function onRearFrameUpdated(framePath) {
-            rearviewMirror.updateFrame(framePath)
         }
 
         function onOrientationUpdated(headingAngle, rollAngle, pitchAngle) {

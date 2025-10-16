@@ -36,7 +36,8 @@ from perception_client import PerceptionClient
 from hud_controller import HUDController
 from voice_listener import VoiceListener
 from caption_client import CaptionClient
-from rear_camera import RearCamera
+# from rear_camera import RearCamera  # Kept for future use, not currently in HUD
+from direct_camera import DirectCamera  # Native GStreamer for main camera
 from openai_voice_assistant import OpenAIRealtimeAssistant
 from wake_word_detector import WakeWordDetector
 from gyro_sensor import GyroSensor
@@ -71,45 +72,11 @@ class VideoImageProvider(QQuickImageProvider):
         with self.lock:
             self.current_image = image
 
-class RearCameraImageProvider(QQuickImageProvider):
-    """Image provider for rear camera frames"""
-
-    def __init__(self):
-        super().__init__(QQuickImageProvider.Image)
-        self.current_image = QImage()
-        self.lock = threading.Lock()
-        self.request_count = 0
-
-    def requestImage(self, id, size, requestedSize):
-        """Provide image to QML"""
-        with self.lock:
-            self.request_count += 1
-            if self.request_count <= 3:
-                print(f"RearCameraImageProvider.requestImage called - id: {id}, has_image: {not self.current_image.isNull()}")
-                if not self.current_image.isNull():
-                    print(f"  Returning image: {self.current_image.width()}x{self.current_image.height()}, format: {self.current_image.format()}")
-
-            if not self.current_image.isNull():
-                return self.current_image.copy()
-            else:
-                # Return empty image if no frame available
-                empty = QImage(240, 180, QImage.Format_RGB888)
-                empty.fill(0)
-                if self.request_count <= 3:
-                    print(f"  Returning empty image")
-                return empty
-
-    def setImage(self, image):
-        """Update the current image"""
-        with self.lock:
-            self.current_image = image
-
 class VisorApp(QObject):
     """Main visor application controller"""
 
     # Signals for QML
     frameUpdated = Signal(str)  # Now passes image path
-    rearFrameUpdated = Signal(str)  # Rear camera frame
     detectionsUpdated = Signal('QVariantList')
     hudStatusUpdated = Signal('QVariantMap')
     snapshotAnalyzed = Signal(str, str)  # snapshot path, analysis text
@@ -117,27 +84,23 @@ class VisorApp(QObject):
     captionReceived = Signal(str, bool)  # caption text, is_final
     orientationUpdated = Signal(float, float, float)  # heading, roll, pitch angles
 
-    def __init__(self, config=None, image_provider=None, rear_image_provider=None, qml_window=None):
+    def __init__(self, config=None, image_provider=None, qml_window=None):
         super().__init__()
         self.config = config
         self.video_client = None
-        self.rear_camera = None
+        self.direct_camera = None  # Direct GStreamer camera
         self.perception_client = None
         self.hud_controller = None
         self.running = False
         self.frame_counter = 0
-        self.rear_frame_counter = 0
         self.qml_window = qml_window  # Reference to QML window for screen capture
 
         # Frame processing
         self._current_frame = None
-        self._current_rear_frame = None
         self._current_detections = []
         self._current_qimage = None
-        self._current_rear_qimage = None
         self._shared_qimage = None
         self.image_provider = image_provider
-        self.rear_image_provider = rear_image_provider
 
         # Voice listener
         self.voice_listener = None
@@ -190,26 +153,19 @@ class VisorApp(QObject):
     def _setup_clients(self):
         """Initialize service clients"""
         try:
-            # Main video client (front camera)
-            video_port = self.config.get('services.video_port', 50051)
-            print(f"Connecting to video service at localhost:{video_port}")
-            self.video_client = VideoClient(f'localhost:{video_port}')
-            print("Video client connected")
+            # Direct camera (CSI camera on cam0 using native GStreamer)
+            sensor_id = self.config.get('video.csi_sensor_id', 0)
+            width = self.config.get('video.width', 1280)
+            height = self.config.get('video.height', 720)
+            fps = self.config.get('video.fps', 30)
 
-            # Rear camera (IMX219 CSI camera in CAM0 slot using GStreamer directly)
-            rear_camera_sensor_id = 0  # CAM0 slot
-            try:
-                self.rear_camera = RearCamera(camera_id=rear_camera_sensor_id)
-                if self.rear_camera.start(use_gstreamer=True):
-                    print(f"Rear camera initialized (sensor-id {rear_camera_sensor_id})")
-                else:
-                    print("Rear camera not available")
-                    self.rear_camera = None
-            except Exception as e:
-                print(f"Rear camera setup failed: {e}")
-                import traceback
-                traceback.print_exc()
-                self.rear_camera = None
+            print(f"Initializing direct camera (sensor-id {sensor_id})...")
+            self.direct_camera = DirectCamera(sensor_id=sensor_id, width=width, height=height, fps=fps)
+            if self.direct_camera.start():
+                print("✓ Direct camera initialized successfully")
+            else:
+                print("⚠ Direct camera failed to initialize")
+                self.direct_camera = None
 
             # Perception client
             perception_port = self.config.get('services.perception_port', 50052)
@@ -232,10 +188,6 @@ class VisorApp(QObject):
         # Frame update timer
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self._update_frame)
-
-        # Rear camera update timer
-        self.rear_frame_timer = QTimer()
-        self.rear_frame_timer.timeout.connect(self._update_rear_frame)
 
         # HUD update timer
         self.hud_timer = QTimer()
@@ -490,10 +442,6 @@ class VisorApp(QObject):
             frame_interval = int(1000 / target_fps)
             self.frame_timer.start(frame_interval)
 
-            # Start rear camera updates (10 FPS - lower to avoid lag)
-            if self.rear_camera:
-                self.rear_frame_timer.start(100)  # 10 FPS
-
             # Start HUD updates (lower frequency)
             print("Starting HUD timer")
             self.hud_timer.start(1000)  # 1 second intervals
@@ -556,7 +504,6 @@ class VisorApp(QObject):
         """Stop the visor application"""
         self.running = False
         self.frame_timer.stop()
-        self.rear_frame_timer.stop()
         self.hud_timer.stop()
 
         if self.voice_listener:
@@ -580,11 +527,9 @@ class VisorApp(QObject):
         if self.video_recorder and self.video_recorder.is_recording_active():
             self.video_recorder.stop_recording()
 
-        if self.rear_camera:
-            self.rear_camera.stop()
+        if self.direct_camera:
+            self.direct_camera.stop()
 
-        if self.video_client:
-            self.video_client.disconnect()
         if self.perception_client:
             self.perception_client.disconnect()
 
@@ -592,8 +537,7 @@ class VisorApp(QObject):
 
     def _update_frame(self):
         """Update video frame and run perception"""
-        if not self.running or not self.video_client:
-            print("Frame update: not running or no video client")
+        if not self.running or not self.direct_camera:
             return
 
         try:
@@ -601,17 +545,24 @@ class VisorApp(QObject):
             if self.hud_controller:
                 self.hud_controller.record_frame()
 
-            # Get frame from video service
-            frame_meta = self.video_client.get_frame()
-            if frame_meta is None:
+            # Get frame from direct camera (numpy array in RGB format)
+            frame = self.direct_camera.get_frame()
+            if frame is None:
                 return
 
-            # Convert to QImage
-            qimage = self._frame_to_qimage(frame_meta)
-            if qimage is None:
+            # IMPORTANT: Keep numpy array alive by storing it as instance variable
+            # QImage is just a wrapper - the underlying data must persist
+            self._current_frame = frame.copy()
+
+            # Convert numpy array to QImage
+            import numpy as np
+            height, width, channels = self._current_frame.shape
+            bytes_per_line = channels * width
+            qimage = QImage(self._current_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+
+            if qimage.isNull():
                 return
 
-            self._current_frame = frame_meta
             self._current_qimage = qimage.copy()  # Store for snapshot (used for snapshots and on-demand vision)
 
             # Add frame to full recorder if recording (capture full screen with widgets)
@@ -686,59 +637,6 @@ class VisorApp(QObject):
         thread = threading.Thread(target=run_perception)
         thread.daemon = True
         thread.start()
-
-    def _update_rear_frame(self):
-        """Update rear camera frame"""
-        if not self.running or not self.rear_camera:
-            if self.rear_frame_counter == 0:
-                print(f"Rear camera update skipped - running: {self.running}, rear_camera: {self.rear_camera}")
-            return
-
-        try:
-            # Get frame from rear camera
-            frame = self.rear_camera.get_frame()
-            if frame is None:
-                if self.rear_frame_counter == 0:
-                    print("Rear camera: no frame available")
-                return
-
-            if self.rear_frame_counter == 0:
-                print(f"Rear camera: first frame received - shape: {frame.shape}, dtype: {frame.dtype}")
-
-            # IMPORTANT: Keep numpy array alive by storing it as instance variable
-            # QImage is just a wrapper - the underlying data must persist
-            self._current_rear_frame = frame.copy()
-
-            import numpy as np
-            height, width, channels = self._current_rear_frame.shape
-            bytes_per_line = channels * width
-
-            # Create QImage pointing to our persistent numpy array
-            qimage = QImage(self._current_rear_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-
-            if qimage.isNull():
-                logger.error("Rear camera QImage is null!")
-                return
-
-            if self.rear_frame_counter == 0:
-                print(f"Rear camera: QImage created - size: {qimage.width()}x{qimage.height()}, format: {qimage.format()}")
-
-            # Use image provider for zero-copy frame updates (no temp files)
-            if self.rear_image_provider:
-                self.rear_image_provider.setImage(qimage.copy())  # Copy QImage data to image provider
-                # Emit update signal with timestamp to trigger QML refresh
-                image_path = f"image://rearcamera/{self.rear_frame_counter}"
-                if self.rear_frame_counter == 0:
-                    print(f"Rear camera: emitting signal with path: {image_path}")
-                self.rearFrameUpdated.emit(image_path)
-                self.rear_frame_counter += 1
-            else:
-                print("ERROR: No rear_image_provider!")
-
-        except Exception as e:
-            logger.error(f"Rear frame update error: {e}")
-            import traceback
-            traceback.print_exc()
 
     def _update_hud(self):
         """Update HUD status information"""
@@ -988,8 +886,8 @@ def main():
     image_provider = VideoImageProvider()
     engine.addImageProvider("video", image_provider)
 
-    rear_image_provider = RearCameraImageProvider()
-    engine.addImageProvider("rearcamera", rear_image_provider)
+    # Create visor app instance BEFORE loading QML (qml_window will be set later)
+    visor_app = VisorApp(config, image_provider, qml_window=None)
 
     qml_file = Path(__file__).parent / "qml" / "main.qml"
 
@@ -997,8 +895,9 @@ def main():
         logger.error(f"QML file not found: {qml_file}")
         sys.exit(1)
 
-    # Set context properties (must be done before creating VisorApp which uses config)
+    # Set context properties BEFORE loading QML
     engine.rootContext().setContextProperty("config", config.all)
+    engine.rootContext().setContextProperty("visorApp", visor_app)
 
     # Load QML with absolute path
     qml_url = QUrl.fromLocalFile(str(qml_file.resolve()))
@@ -1009,14 +908,9 @@ def main():
         logger.error("Failed to load QML file")
         sys.exit(1)
 
-    # Get QML window for screen capture
+    # Get QML window for screen capture and set it on visor_app
     qml_window = engine.rootObjects()[0]
-
-    # Create visor app instance with image providers AND QML window reference
-    visor_app = VisorApp(config, image_provider, rear_image_provider, qml_window)
-
-    # Set visor app as context property (must be after creation)
-    engine.rootContext().setContextProperty("visorApp", visor_app)
+    visor_app.qml_window = qml_window
 
     # Start visor app
     visor_app.start()

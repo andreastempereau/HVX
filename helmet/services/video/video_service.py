@@ -29,6 +29,8 @@ class VideoCapture:
     def __init__(self, config):
         self.config = config
         self.cap = None
+        self.cap_left = None  # For dual camera mode
+        self.cap_right = None  # For dual camera mode
         self.frame_id = 0
         self.lock = threading.Lock()
         self._setup_capture()
@@ -36,7 +38,7 @@ class VideoCapture:
     def _setup_capture(self):
         """Initialize video capture based on configuration"""
         try:
-            camera_type = self.config.get('video.camera_type', 'webcam')  # webcam, file, csi
+            camera_type = self.config.get('video.camera_type', 'webcam')  # webcam, file, csi, csi_dual
 
             if camera_type == 'file':
                 # Video file source (for testing with sample footage)
@@ -86,6 +88,48 @@ class VideoCapture:
                 logger.info(f"Using CSI camera with GStreamer: {gst_pipeline}")
                 self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
 
+            elif camera_type == 'csi_dual':
+                # Dual CSI cameras (both IMX219) - combine into single feed
+                left_sensor_id = self.config.get('video.dual_camera.left_sensor_id', 0)
+                right_sensor_id = self.config.get('video.dual_camera.right_sensor_id', 1)
+                width = self.config.get('video.width', 1280)
+                height = self.config.get('video.height', 720)
+                fps = self.config.get('video.fps', 30)
+
+                # GStreamer pipeline for left camera
+                gst_pipeline_left = (
+                    f"nvarguscamerasrc sensor-id={left_sensor_id} ! "
+                    f"video/x-raw(memory:NVMM), width={width}, height={height}, "
+                    f"format=NV12, framerate={fps}/1 ! "
+                    f"nvvideoconvert flip-method=2 ! "
+                    f"video/x-raw, width={width}, height={height}, format=BGRx ! "
+                    f"videoconvert ! "
+                    f"video/x-raw, format=BGR ! appsink max-buffers=1 drop=true"
+                )
+
+                # GStreamer pipeline for right camera
+                gst_pipeline_right = (
+                    f"nvarguscamerasrc sensor-id={right_sensor_id} ! "
+                    f"video/x-raw(memory:NVMM), width={width}, height={height}, "
+                    f"format=NV12, framerate={fps}/1 ! "
+                    f"nvvideoconvert flip-method=2 ! "
+                    f"video/x-raw, width={width}, height={height}, format=BGRx ! "
+                    f"videoconvert ! "
+                    f"video/x-raw, format=BGR ! appsink max-buffers=1 drop=true"
+                )
+
+                logger.info(f"Using dual CSI cameras:")
+                logger.info(f"  Left camera (sensor {left_sensor_id}): {gst_pipeline_left}")
+                logger.info(f"  Right camera (sensor {right_sensor_id}): {gst_pipeline_right}")
+
+                self.cap_left = cv2.VideoCapture(gst_pipeline_left, cv2.CAP_GSTREAMER)
+                self.cap_right = cv2.VideoCapture(gst_pipeline_right, cv2.CAP_GSTREAMER)
+
+                if not self.cap_left.isOpened() or not self.cap_right.isOpened():
+                    raise RuntimeError("Failed to open one or both CSI cameras")
+
+                logger.info("Dual CSI cameras initialized successfully")
+
             # Set capture properties (for webcam/USB cameras)
             if camera_type in ['webcam', 'file']:
                 width = self.config.get('video.width', 1920)
@@ -113,30 +157,66 @@ class VideoCapture:
                 logger.info(f"Camera properties - Requested: {width}x{height}@{fps}fps")
                 logger.info(f"Camera properties - Actual: {actual_width}x{actual_height}@{actual_fps}fps")
 
-            if not self.cap.isOpened():
-                raise RuntimeError(f"Failed to open {camera_type} camera")
+            # Test capture for single camera modes
+            if camera_type in ['webcam', 'file', 'csi']:
+                if not self.cap.isOpened():
+                    raise RuntimeError(f"Failed to open {camera_type} camera")
 
-            # Test capture with retries (camera needs warm-up time)
-            # Flush initial frames from buffer
-            for _ in range(5):
-                self.cap.grab()
+                # Test capture with retries (camera needs warm-up time)
+                # Flush initial frames from buffer
+                for _ in range(5):
+                    self.cap.grab()
 
-            test_success = False
-            for attempt in range(10):
-                ret, test_frame = self.cap.read()
-                if ret and test_frame is not None and test_frame.size > 0:
-                    logger.info(f"Video capture test successful: {test_frame.shape}")
-                    test_success = True
-                    break
-                else:
-                    logger.warning(f"Frame read attempt {attempt + 1} failed, retrying...")
+                test_success = False
+                for attempt in range(10):
+                    ret, test_frame = self.cap.read()
+                    if ret and test_frame is not None and test_frame.size > 0:
+                        logger.info(f"Video capture test successful: {test_frame.shape}")
+                        test_success = True
+                        break
+                    else:
+                        logger.warning(f"Frame read attempt {attempt + 1} failed, retrying...")
+                        time.sleep(0.5)
+
+                if not test_success:
+                    logger.error("Video capture test failed after 10 attempts")
+                    raise RuntimeError("Unable to read frames from camera")
+
+                logger.info(f"Video capture initialized successfully with {camera_type} camera")
+
+            # Test capture for dual camera mode
+            elif camera_type == 'csi_dual':
+                # Flush initial frames from both cameras
+                for _ in range(5):
+                    self.cap_left.grab()
+                    self.cap_right.grab()
+
+                test_success_left = False
+                test_success_right = False
+
+                for attempt in range(10):
+                    ret_left, test_frame_left = self.cap_left.read()
+                    ret_right, test_frame_right = self.cap_right.read()
+
+                    if ret_left and test_frame_left is not None and test_frame_left.size > 0:
+                        logger.info(f"Left camera test successful: {test_frame_left.shape}")
+                        test_success_left = True
+
+                    if ret_right and test_frame_right is not None and test_frame_right.size > 0:
+                        logger.info(f"Right camera test successful: {test_frame_right.shape}")
+                        test_success_right = True
+
+                    if test_success_left and test_success_right:
+                        break
+
+                    logger.warning(f"Dual camera read attempt {attempt + 1} (left: {test_success_left}, right: {test_success_right})")
                     time.sleep(0.5)
 
-            if not test_success:
-                logger.error("Video capture test failed after 10 attempts")
-                raise RuntimeError("Unable to read frames from camera")
+                if not (test_success_left and test_success_right):
+                    logger.error("Dual camera test failed after 10 attempts")
+                    raise RuntimeError("Unable to read frames from one or both cameras")
 
-            logger.info(f"Video capture initialized successfully with {camera_type} camera")
+                logger.info(f"Dual camera capture initialized successfully")
 
         except Exception as e:
             logger.error(f"Failed to setup video capture: {e}")
@@ -152,62 +232,155 @@ class VideoCapture:
                 logger.error(f"Fallback also failed: {fallback_error}")
                 raise RuntimeError("No video source available")
 
+    def _combine_frames(self, frame_left: np.ndarray, frame_right: np.ndarray) -> np.ndarray:
+        """Combine two frames based on combination mode"""
+        combination_mode = self.config.get('video.dual_camera.combination_mode', 'side-by-side')
+
+        if combination_mode == 'side-by-side':
+            # Horizontal concatenation (left | right)
+            combined = np.hstack((frame_left, frame_right))
+            logger.debug(f"Combined side-by-side: {combined.shape}")
+
+        elif combination_mode == 'top-bottom':
+            # Vertical concatenation (top / bottom)
+            combined = np.vstack((frame_left, frame_right))
+            logger.debug(f"Combined top-bottom: {combined.shape}")
+
+        elif combination_mode == 'pip':
+            # Picture-in-picture mode
+            pip_position = self.config.get('video.dual_camera.pip_position', 'top-right')
+            pip_scale = self.config.get('video.dual_camera.pip_scale', 0.25)
+
+            # Start with left frame as base
+            combined = frame_left.copy()
+
+            # Resize right frame for PIP
+            pip_height = int(frame_right.shape[0] * pip_scale)
+            pip_width = int(frame_right.shape[1] * pip_scale)
+            pip_frame = cv2.resize(frame_right, (pip_width, pip_height))
+
+            # Calculate position
+            h, w = combined.shape[:2]
+            ph, pw = pip_frame.shape[:2]
+
+            if pip_position == 'top-left':
+                y, x = 10, 10
+            elif pip_position == 'top-right':
+                y, x = 10, w - pw - 10
+            elif pip_position == 'bottom-left':
+                y, x = h - ph - 10, 10
+            elif pip_position == 'bottom-right':
+                y, x = h - ph - 10, w - pw - 10
+            else:
+                y, x = 10, w - pw - 10  # Default to top-right
+
+            # Overlay PIP frame with border
+            # Add white border
+            cv2.rectangle(combined, (x-2, y-2), (x+pw+2, y+ph+2), (255, 255, 255), 2)
+            combined[y:y+ph, x:x+pw] = pip_frame
+
+            logger.debug(f"Combined PIP: {combined.shape}, pip at ({x}, {y})")
+
+        else:
+            # Default to side-by-side
+            combined = np.hstack((frame_left, frame_right))
+            logger.warning(f"Unknown combination mode '{combination_mode}', using side-by-side")
+
+        return combined
+
     @log_performance("frame_capture")
     def get_frame(self) -> Optional[helmet_pb2.FrameMeta]:
         """Capture a single frame"""
         with self.lock:
-            if not self.cap or not self.cap.isOpened():
-                logger.error("Camera not opened, attempting to reconnect...")
-                self._setup_capture()
+            camera_type = self.config.get('video.camera_type', 'webcam')
+
+            # Handle dual camera mode
+            if camera_type == 'csi_dual':
+                if not self.cap_left or not self.cap_left.isOpened() or not self.cap_right or not self.cap_right.isOpened():
+                    logger.error("One or both cameras not opened, attempting to reconnect...")
+                    self._setup_capture()
+                    if not self.cap_left or not self.cap_left.isOpened() or not self.cap_right or not self.cap_right.isOpened():
+                        return None
+
+                ret_left, frame_left = self.cap_left.read()
+                ret_right, frame_right = self.cap_right.read()
+
+                if not ret_left or frame_left is None or not ret_right or frame_right is None:
+                    logger.warning("Failed to read from one or both cameras, retrying...")
+                    time.sleep(0.1)
+                    ret_left, frame_left = self.cap_left.read()
+                    ret_right, frame_right = self.cap_right.read()
+
+                    if not ret_left or frame_left is None or not ret_right or frame_right is None:
+                        logger.error("Failed to read frames from dual cameras after retry")
+                        return None
+
+                logger.debug(f"Successfully captured frames: left={frame_left.shape}, right={frame_right.shape}")
+
+                # Convert BGR to RGB for both frames
+                if self.config.get('video.format', 'RGB') == 'RGB':
+                    frame_left = cv2.cvtColor(frame_left, cv2.COLOR_BGR2RGB)
+                    frame_right = cv2.cvtColor(frame_right, cv2.COLOR_BGR2RGB)
+
+                # Note: flip is already handled in GStreamer pipeline (flip-method=2)
+
+                # Combine frames
+                frame = self._combine_frames(frame_left, frame_right)
+
+            # Handle single camera modes
+            else:
                 if not self.cap or not self.cap.isOpened():
-                    return None
+                    logger.error("Camera not opened, attempting to reconnect...")
+                    self._setup_capture()
+                    if not self.cap or not self.cap.isOpened():
+                        return None
 
-            ret, frame = self.cap.read()
-            if not ret or frame is None:
-                logger.warning("Failed to read frame from camera, retrying...")
-                # Try one more time with a small delay
-                time.sleep(0.1)
                 ret, frame = self.cap.read()
-
                 if not ret or frame is None:
-                    # Loop video file if using file source
-                    if self.config.get('video.camera_type', 'webcam') == 'file':
-                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = self.cap.read()
-                        if not ret:
-                            logger.error("Failed to read frame even after loop")
-                            return None
-                    else:
-                        # Webcam might be frozen, try to reinitialize
-                        logger.warning("Camera appears frozen, reinitializing...")
-                        self.cap.release()
-                        time.sleep(0.5)
-                        self._setup_capture()
+                    logger.warning("Failed to read frame from camera, retrying...")
+                    # Try one more time with a small delay
+                    time.sleep(0.1)
+                    ret, frame = self.cap.read()
 
-                        if self.cap and self.cap.isOpened():
+                    if not ret or frame is None:
+                        # Loop video file if using file source
+                        if self.config.get('video.camera_type', 'webcam') == 'file':
+                            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                             ret, frame = self.cap.read()
-                            if not ret or frame is None:
-                                logger.error("Failed to read frame after reinitialization")
+                            if not ret:
+                                logger.error("Failed to read frame even after loop")
                                 return None
                         else:
-                            logger.error("Failed to reinitialize camera")
-                            return None
+                            # Webcam might be frozen, try to reinitialize
+                            logger.warning("Camera appears frozen, reinitializing...")
+                            self.cap.release()
+                            time.sleep(0.5)
+                            self._setup_capture()
 
-            logger.debug(f"Successfully captured frame: {frame.shape}")
+                            if self.cap and self.cap.isOpened():
+                                ret, frame = self.cap.read()
+                                if not ret or frame is None:
+                                    logger.error("Failed to read frame after reinitialization")
+                                    return None
+                            else:
+                                logger.error("Failed to reinitialize camera")
+                                return None
 
-            # Fix YUYV misinterpretation (camera outputs YUYV but OpenCV reads as BGR)
-            # Check if we have the YUYV problem (only green channel has data)
-            if frame[:,:,0].max() < 10 and frame[:,:,2].max() < 10 and frame[:,:,1].max() > 10:
-                logger.info("Detected YUYV format, extracting luminance channel")
-                # Extract Y (luminance) channel from green channel and convert to RGB
-                gray = frame[:,:,1]
-                frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-            elif self.config.get('video.format', 'RGB') == 'RGB':
-                # Normal BGR to RGB conversion
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                logger.debug(f"Successfully captured frame: {frame.shape}")
 
-            # Flip frame 180 degrees (upside down)
-            frame = cv2.flip(frame, -1)
+                # Fix YUYV misinterpretation (camera outputs YUYV but OpenCV reads as BGR)
+                # Check if we have the YUYV problem (only green channel has data)
+                if frame[:,:,0].max() < 10 and frame[:,:,2].max() < 10 and frame[:,:,1].max() > 10:
+                    logger.info("Detected YUYV format, extracting luminance channel")
+                    # Extract Y (luminance) channel from green channel and convert to RGB
+                    gray = frame[:,:,1]
+                    frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+                elif self.config.get('video.format', 'RGB') == 'RGB':
+                    # Normal BGR to RGB conversion
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Flip frame 180 degrees (upside down)
+                frame = cv2.flip(frame, -1)
 
             # Create protobuf message
             frame_meta = helmet_pb2.FrameMeta()
@@ -232,6 +405,16 @@ class VideoCapture:
                 self.cap.release()
                 self.cap = None
                 logger.info("Video capture released")
+
+            if self.cap_left:
+                self.cap_left.release()
+                self.cap_left = None
+                logger.info("Left camera released")
+
+            if self.cap_right:
+                self.cap_right.release()
+                self.cap_right = None
+                logger.info("Right camera released")
 
 class VideoServiceImpl(helmet_pb2_grpc.VideoServiceServicer):
     """gRPC video service implementation"""
