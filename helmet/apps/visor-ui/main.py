@@ -153,18 +153,33 @@ class VisorApp(QObject):
     def _setup_clients(self):
         """Initialize service clients"""
         try:
-            # Direct camera (CSI camera on cam0 using native GStreamer)
-            sensor_id = self.config.get('video.csi_sensor_id', 0)
+            # Direct camera (dual USB cameras with split-screen)
+            dual_mode = self.config.get('video.dual_mode', True)
+            device_left = self.config.get('video.device_left', '/dev/video0')
+            device_right = self.config.get('video.device_right', '/dev/video1')
             width = self.config.get('video.width', 1280)
             height = self.config.get('video.height', 720)
             fps = self.config.get('video.fps', 30)
 
-            print(f"Initializing direct camera (sensor-id {sensor_id})...")
-            self.direct_camera = DirectCamera(sensor_id=sensor_id, width=width, height=height, fps=fps)
+            print(f"Initializing dual camera setup...")
+            print(f"  Left camera: {device_left}")
+            print(f"  Right camera: {device_right}")
+            print(f"  Resolution: {width}x{height}@{fps}fps")
+
+            self.direct_camera = DirectCamera(
+                sensor_id=0,  # Not used in dual mode
+                width=width,
+                height=height,
+                fps=fps,
+                dual_mode=dual_mode,
+                device_left=device_left,
+                device_right=device_right
+            )
+
             if self.direct_camera.start():
-                print("✓ Direct camera initialized successfully")
+                print("✓ Dual camera initialized successfully")
             else:
-                print("⚠ Direct camera failed to initialize")
+                print("⚠ Dual camera failed to initialize")
                 self.direct_camera = None
 
             # Perception client
@@ -280,7 +295,7 @@ class VisorApp(QObject):
             voice = self.config.get('assistant.voice', 'alloy')  # alloy, echo, fable, onyx, nova, shimmer
             input_device = self.config.get('assistant.input_device_index', None)
             output_device = self.config.get('assistant.output_device_index', None)
-            output_volume = self.config.get('assistant.output_volume', 1.0)
+            output_volume = self.config.get('assistant.output_volume', 3.0)
             system_prompt = self.config.get('assistant.system_prompt',
                 "You are a helpful AI assistant integrated into an AR helmet. Provide concise, clear responses suitable for voice interaction.")
 
@@ -465,10 +480,17 @@ class VisorApp(QObject):
                 print("Starting wake word detector...")
                 self.wake_word_detector.start(self._on_wake_word_detected)
                 print("Wake word detector started!")
+
+                # Wait for wake word detector to fully initialize before starting voice assistant
+                # This prevents microphone/PyAudio resource conflicts
+                print("Waiting for wake word detector to initialize...")
+                import time
+                time.sleep(3)  # Give it 3 seconds to initialize PyAudio and open audio stream
+                print("Wake word detector initialization complete")
             else:
                 print("WARNING: No wake word detector to start")
 
-            # Start voice assistant
+            # Start voice assistant (but don't activate it - wake word will activate it)
             if self.voice_assistant:
                 print("Starting voice assistant...")
                 self.voice_assistant.start()

@@ -1,9 +1,11 @@
 {
   "video": {
-    "camera_type": "csi",
-    "csi_sensor_id": 0,
-    "width": 1920,
-    "height": 1080,
+    "camera_type": "dual_usb",
+    "dual_mode": true,
+    "device_left": "/dev/video0",
+    "device_right": "/dev/video1",
+    "width": 1280,
+    "height": 720,
     "fps": 30,
     "format": "RGB"
   },
@@ -23,7 +25,7 @@
     "sample_rate": 16000
   },
   "ui": {
-    "fullscreen": true,
+    "fullscreen": false,
     "dual_eye": true,
     "lens_correction": {
       "enabled": true,

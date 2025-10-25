@@ -6,8 +6,8 @@ import HelmetUI 1.0
 ApplicationWindow {
     id: window
     visible: true
-    width: 1920
-    height: 1080
+    width: 1440
+    height: 1440
     title: "Helmet Visor UI"
 
     // Remove window decorations for fullscreen
@@ -304,5 +304,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         keyHandler.forceActiveFocus()
+        // Ensure window starts in normal (non-fullscreen) mode
+        window.visibility = Window.Windowed
     }
 }

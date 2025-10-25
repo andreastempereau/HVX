@@ -299,7 +299,7 @@ Rectangle {
             "[NET ] localhost:50055 - telemetry: ONLINE",
             "[NET ] WebSocket server: ws://0.0.0.0:8080",
             "[GPU ] Initializing display compositor",
-            "[GPU ] Resolution: 1920x1080 @ 60Hz",
+            "[GPU ] Resolution: 1440x1440 @ 60Hz",
             "[GPU ] OpenGL 4.5 detected",
             "[GPU ] CUDA Toolkit 10.2 loaded",
             "[GPU ] cuDNN 8.0.0 initialized",

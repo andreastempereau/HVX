@@ -23,7 +23,7 @@ class OpenAIRealtimeAssistant:
         voice: str = "alloy",  # alloy, echo, fable, onyx, nova, shimmer
         input_device_index: Optional[int] = None,
         output_device_index: Optional[int] = None,
-        output_volume: float = 1.0,  # Output volume multiplier (0.0-1.0)
+        output_volume: float = 3.0,  # Output volume multiplier (0.0-5.0, higher = louder)
         wake_word_detector=None,  # Reference to wake word detector to resume it
         frame_getter=None,  # Function to get current camera frame on-demand
         system_monitor=None,  # System telemetry monitor
@@ -34,7 +34,7 @@ class OpenAIRealtimeAssistant:
         self.voice = voice
         self.input_device_index = input_device_index
         self.output_device_index = output_device_index
-        self.output_volume = max(0.0, min(1.0, output_volume))  # Clamp to 0.0-1.0
+        self.output_volume = max(0.0, min(5.0, output_volume))  # Clamp to 0.0-5.0 (allow amplification)
         self.wake_word_detector = wake_word_detector
         self.frame_getter = frame_getter  # On-demand frame capture
         self.system_monitor = system_monitor  # System telemetry
@@ -209,7 +209,7 @@ class OpenAIRealtimeAssistant:
                 self._setup_audio()
 
                 # Connect to OpenAI Realtime API
-                url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
+                url = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
 
                 print(f"[OpenAI] Connecting to Realtime API (attempt {retry_count + 1}/{max_retries})...")
 
@@ -324,8 +324,8 @@ class OpenAIRealtimeAssistant:
                 },
                 "temperature": 0.7,
                 "max_response_output_tokens": 200,  # Keep responses brief but useful
-                # Note: Vision support via gpt-4o model which supports multimodal inputs
-                "model": "gpt-4o-realtime-preview-2024-10-01",
+                # Note: Vision support via gpt-realtime model which supports multimodal inputs
+                "model": "gpt-realtime",
                 "tools": [
                     {
                         "type": "function",

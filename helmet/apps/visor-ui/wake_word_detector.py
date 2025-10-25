@@ -156,8 +156,12 @@ class WakeWordDetector:
         import sys
 
         # Force unbuffered output for debugging
-        import io
-        sys.stdout = io.TextIOWrapper(open(sys.stdout.fileno(), 'wb', 0), write_through=True)
+        try:
+            import io
+            sys.stdout = io.TextIOWrapper(open(sys.stdout.fileno(), 'wb', 0), write_through=True)
+        except Exception as e:
+            # If unbuffered output fails, continue anyway
+            print(f"[Wake Word] Warning: Could not set unbuffered output: {e}", flush=True)
 
         print(f"[Wake Word] _run_detection thread started", flush=True)
         sys.stdout.flush()
@@ -299,9 +303,10 @@ class WakeWordDetector:
                     audio_rms = np.sqrt(np.mean(audio_array.astype(np.float32)**2))
 
                     # Debug: Print scores every 25 frames (~2 seconds) with audio level
-                    if frame_count % 25 == 0:
-                        scores_str = ", ".join([f"{k}: {v:.3f}" for k, v in prediction.items()])
-                        print(f"[Wake Word] Frame {frame_count}: {scores_str} | Audio level: {audio_rms:.0f}")
+                    # Commented out to reduce console spam
+                    # if frame_count % 25 == 0:
+                    #     scores_str = ", ".join([f"{k}: {v:.3f}" for k, v in prediction.items()])
+                    #     print(f"[Wake Word] Frame {frame_count}: {scores_str} | Audio level: {audio_rms:.0f}")
 
                     # Check if any wake word detected (threshold 0.3 - lowered from 0.5 for better sensitivity)
                     # Note: openWakeWord default threshold is 0.5, but we're using 0.3 to catch more detections
