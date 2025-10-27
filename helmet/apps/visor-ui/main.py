@@ -43,6 +43,8 @@ from wake_word_detector import WakeWordDetector
 from gyro_sensor import GyroSensor
 from system_monitor import SystemMonitor
 from full_recorder import FullRecorder
+from gps_client import GPSClient
+from minimap_controller import MinimapController, MinimapImageProvider
 
 import logging
 logger = logging.getLogger(__name__)
@@ -83,6 +85,9 @@ class VisorApp(QObject):
     voiceCommandReceived = Signal(str)  # voice command
     captionReceived = Signal(str, bool)  # caption text, is_final
     orientationUpdated = Signal(float, float, float)  # heading, roll, pitch angles
+    gpsPositionUpdated = Signal(float, float, float, float)  # lat, lon, altitude, heading
+    gpsStatusUpdated = Signal('QVariantMap')  # GPS status info
+    minimapUpdated = Signal(str)  # minimap image path
 
     def __init__(self, config=None, image_provider=None, qml_window=None):
         super().__init__()
@@ -123,6 +128,16 @@ class VisorApp(QObject):
         # Video recorder
         self.video_recorder = None
 
+        # GPS client
+        self.gps_client = None
+
+        # Minimap controller
+        self.minimap_controller = None
+        self.minimap_image_provider = None
+
+        # Current heading from IMU (for minimap rotation)
+        self._current_heading = 0.0
+
         # Setup components
         if self.config:
             print("="*60)
@@ -149,6 +164,9 @@ class VisorApp(QObject):
             print("\n--- Setting up gyroscope sensor ---")
             self._setup_gyro()
             print("--- Gyroscope sensor setup complete ---\n")
+            print("\n--- Setting up GPS ---")
+            self._setup_gps()
+            print("--- GPS setup complete ---\n")
 
     def _setup_clients(self):
         """Initialize service clients"""
@@ -360,6 +378,33 @@ class VisorApp(QObject):
             print(f"ERROR: System monitor not available: {e}")
             traceback.print_exc()
 
+    def _setup_gps(self):
+        """Setup GPS client and minimap"""
+        try:
+            # Get GPS config
+            gps_port = self.config.get('gps.port', '/dev/ttyUSB0')
+            gps_baudrate = self.config.get('gps.baudrate', 115200)
+
+            print(f"Initializing GPS client on {gps_port} at {gps_baudrate} baud...")
+
+            self.gps_client = GPSClient(port=gps_port, baudrate=gps_baudrate)
+
+            # Connect signals
+            self.gps_client.positionUpdated.connect(self._on_gps_position_update)
+            self.gps_client.statusUpdated.connect(self._on_gps_status_update)
+
+            logger.info("GPS client initialized")
+            print("✓ GPS client initialized successfully")
+
+            # Setup minimap (pass minimap image provider from main)
+            # Note: minimap_image_provider must be passed from main()
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"GPS client not available: {e}")
+            print(f"ERROR: GPS client not available: {e}")
+            traceback.print_exc()
+
     def _setup_video_recorder(self):
         """Setup full recorder (video + widgets + audio)"""
         try:
@@ -420,6 +465,13 @@ class VisorApp(QObject):
         roll = orientation_data['euler'][1] or 0.0  # Roll is index 1
         pitch = orientation_data['euler'][2] or 0.0  # Pitch is index 2
 
+        # Update current heading for minimap
+        self._current_heading = heading
+
+        # Update minimap rotation if available
+        if self.minimap_controller:
+            self.minimap_controller.update_heading(heading)
+
         # Use QMetaObject.invokeMethod for thread-safe signal emission
         from PySide6.QtCore import QMetaObject, Qt, Q_ARG
         QMetaObject.invokeMethod(
@@ -430,6 +482,24 @@ class VisorApp(QObject):
             Q_ARG(float, roll),
             Q_ARG(float, pitch)
         )
+
+    def _on_gps_position_update(self, lat: float, lon: float, altitude: float, heading: float):
+        """Handle GPS position updates"""
+        # Emit to QML
+        self.gpsPositionUpdated.emit(lat, lon, altitude, heading)
+
+        # Update minimap if available
+        if self.minimap_controller:
+            self.minimap_controller.update_position(lat, lon)
+
+            # Use GPS heading if IMU not available and GPS has heading data
+            if not self.gyro_sensor and heading and heading > 0:
+                self.minimap_controller.update_heading(heading)
+
+    def _on_gps_status_update(self, status: dict):
+        """Handle GPS status updates"""
+        # Emit to QML
+        self.gpsStatusUpdated.emit(status)
 
     def _on_wake_word_detected(self, keyword: str):
         """Handle wake word detection"""
@@ -514,6 +584,16 @@ class VisorApp(QObject):
             else:
                 print("WARNING: No system monitor to start")
 
+            # Start GPS client
+            if self.gps_client:
+                print("Starting GPS client...")
+                if self.gps_client.start():
+                    print("GPS client started!")
+                else:
+                    print("WARNING: GPS client failed to start (check permissions and connection)")
+            else:
+                print("WARNING: No GPS client to start")
+
             print("Visor app started successfully")
             logger.info("Visor app started")
 
@@ -545,6 +625,9 @@ class VisorApp(QObject):
 
         if self.system_monitor:
             self.system_monitor.stop()
+
+        if self.gps_client:
+            self.gps_client.stop()
 
         if self.video_recorder and self.video_recorder.is_recording_active():
             self.video_recorder.stop_recording()
@@ -908,8 +991,17 @@ def main():
     image_provider = VideoImageProvider()
     engine.addImageProvider("video", image_provider)
 
+    # Create and register minimap image provider
+    minimap_image_provider = MinimapImageProvider()
+    engine.addImageProvider("minimap", minimap_image_provider)
+
     # Create visor app instance BEFORE loading QML (qml_window will be set later)
     visor_app = VisorApp(config, image_provider, qml_window=None)
+
+    # Create and setup minimap controller
+    visor_app.minimap_image_provider = minimap_image_provider
+    visor_app.minimap_controller = MinimapController(minimap_image_provider)
+    visor_app.minimap_controller.minimapUpdated.connect(visor_app.minimapUpdated.emit)
 
     qml_file = Path(__file__).parent / "qml" / "main.qml"
 

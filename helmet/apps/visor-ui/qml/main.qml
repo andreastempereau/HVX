@@ -141,6 +141,19 @@ ApplicationWindow {
         z: 100  // Above video but below overlays
     }
 
+    // GPS Minimap (bottom-left corner)
+    Minimap {
+        id: minimap
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: 20
+        anchors.bottomMargin: 20
+        width: 300
+        height: 300
+        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
+        z: 200  // Above HUD but below overlays
+    }
+
     // HUD Preset Wheel (always enabled, even in clear mode)
     HUDPresetWheel {
         id: hudPresetWheel
