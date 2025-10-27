@@ -75,7 +75,7 @@ Rectangle {
 
             // Subtitle
             Text {
-                text: "HELMET VISION SYSTEM v1.1.1"
+                text: "HELMET VISION SYSTEM v1.3.0"
                 font.family: "Consolas"
                 font.pixelSize: 12
                 font.letterSpacing: 2
