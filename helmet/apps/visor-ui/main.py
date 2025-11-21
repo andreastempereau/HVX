@@ -977,8 +977,13 @@ class VisorApp(QObject):
                     logger.error("Failed to save snapshot")
 
             except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
                 logger.error(f"Snapshot analysis error: {e}")
-                self.snapshotAnalyzed.emit("", f"Analysis failed: {str(e)}")
+                logger.error(f"Full traceback:\n{error_trace}")
+                print(f"ERROR: Snapshot analysis failed:")
+                print(error_trace)
+                self.snapshotAnalyzed.emit("", f"Analysis failed: {str(e)}\n\nCheck terminal for details.")
 
         # Run in thread to avoid blocking UI
         thread = threading.Thread(target=analyze_async)
