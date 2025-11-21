@@ -1,7 +1,7 @@
 # Helmet Project - Complete File Structure Analysis
 
 ## PROJECT OVERVIEW
-**Version:** 1.3.0 | **Platform:** Jetson Orin Nano | **Language:** Python 3.10+
+**Version:** 2.0.0 | **Platform:** Jetson Orin Nano | **Language:** Python 3.10+
 
 Helmet OS is a microservices-based AR/VR system with:
 - Dual-camera vision system (CSI + USB cameras)

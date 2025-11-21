@@ -1,6 +1,6 @@
 # Helmet OS - AR/VR Vision System
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue) ![Platform](https://img.shields.io/badge/platform-Jetson%20Orin%20Nano-green) ![Python](https://img.shields.io/badge/python-3.10+-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue) ![Platform](https://img.shields.io/badge/platform-Jetson%20Orin%20Nano-green) ![Python](https://img.shields.io/badge/python-3.10+-blue)
 
 A complete software stack for an AR helmet system featuring real-time video capture, AI-powered object detection, voice control, and dual-eye display with augmented reality overlays.
 
