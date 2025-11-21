@@ -211,9 +211,11 @@ class MinimapController(QObject):
             offset_x = world_x - (center_tile_x * self.tile_size)
             offset_y = world_y - (center_tile_y * self.tile_size)
 
+            # Calculate center position
+            center = self.minimap_size / 2
+
             # Apply rotation based on heading (disabled if heading is 0)
             if self.heading != 0:
-                center = self.minimap_size / 2
                 painter.translate(center, center)
                 painter.rotate(-self.heading)  # Negative to rotate map, not player
                 painter.translate(-center, -center)

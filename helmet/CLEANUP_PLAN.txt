@@ -1,0 +1,240 @@
+================================================================================
+                    HELMET PROJECT CLEANUP PLAN
+                        Quick Reference Summary
+================================================================================
+
+PROJECT STATS:
+  Total Python Lines:     9191 lines
+  Services (REMOVE):      2934 lines gRPC backends
+  UI (KEEP):             6257 lines Qt/QML application
+  Removal Ratio:          ~32% code reduction
+
+ARCHITECTURE CHANGE:
+  FROM: Microservices with gRPC inter-process communication
+         - Video Service (50051)
+         - Perception Service (50052)
+         - Voice Service (50053)
+         - Orchestrator Service (50054)
+         
+  TO:   Monolithic Qt/QML application with direct hardware access
+         - All functions in single process (visor-ui)
+         - Direct camera, IMU, GPS, voice processing
+         - Simpler deployment, lower latency
+
+================================================================================
+                            KEEP (PRIORITY 1)
+================================================================================
+
+apps/visor-ui/                               [30 files, 6257 lines] *** CORE ***
+  ├─ main.py                                 [1064 lines] Main application
+  ├─ QML Interface (14 files)                [~150 lines each] UI components
+  ├─ Hardware Handlers
+  │  ├─ direct_camera.py
+  │  ├─ rear_camera.py
+  │  ├─ gyro_sensor.py
+  │  ├─ gps_client.py
+  │  └─ wake_word_detector.py
+  ├─ Voice Assistants
+  │  ├─ openai_voice_assistant.py            [1099 lines]
+  │  ├─ voice_assistant.py
+  │  └─ voice_listener.py
+  └─ Recording/System
+     ├─ full_recorder.py
+     ├─ video_recorder.py
+     └─ system_monitor.py
+
+libs/utils/                                  [Essential infrastructure]
+  ├─ config.py                               [Configuration management]
+  └─ logging_utils.py                        [Logging utilities]
+
+configs/profiles/                             [Configuration files]
+  ├─ dev.json
+  ├─ field.json
+  └─ demo.json
+
+docs/ and tests/                             [Educational/Validation]
+  ├─ README.md, TECHNICAL_REVIEW.md
+  ├─ test_*.py scripts
+  └─ Utility scripts
+
+================================================================================
+                            REMOVE (PRIORITY 1)
+================================================================================
+
+services/                                    [2934 lines] *** DELETE ALL ***
+  ├─ orchestrator/
+  │  └─ orchestrator_service.py             [570 lines gRPC server]
+  ├─ video/
+  │  └─ video_service.py                    [527 lines gRPC server]
+  ├─ perception/
+  │  └─ perception_service.py               [656 lines gRPC server]
+  ├─ voice/
+  │  └─ voice_service.py                    [555 lines gRPC server]
+  └─ gps/
+     ├─ gps_service.py                      [311 lines]
+     └─ wifi_positioning.py                 [310 lines]
+
+libs/messages/ (EXCEPT keep for reference)   [gRPC Protocol definitions]
+  ├─ helmet.proto                           [Can delete]
+  ├─ helmet_pb2.py                          [Can delete]
+  └─ helmet_pb2_grpc.py                     [Can delete]
+
+apps/visor-ui/ (REMOVE ONLY):
+  ├─ video_client.py                        [85 lines, no longer needed]
+  ├─ perception_client.py                   [79 lines, no longer needed]
+  └─ caption_client.py                      [227 lines, depends on service]
+
+================================================================================
+                          CLEAN/OPTIMIZE (PRIORITY 2)
+================================================================================
+
+.map_cache/                                 [~2000 PNG map tiles]
+  └─ Delete all                             [Remove generated files]
+
+models/
+  ├─ yolov4.weights                         [45MB, REMOVE]
+  ├─ yolov4.cfg                             [Keep, reference only]
+  └─ coco.names                             [Keep, reference only]
+
+logs/ and recordings/                        [Runtime artifacts]
+  └─ Clean/delete all                       [Will be regenerated]
+
+deploy/systemd/                              [Remove service units]
+  ├─ helmet-orchestrator.service            [DELETE]
+  ├─ helmet-video.service                   [DELETE]
+  ├─ helmet-perception.service              [DELETE]
+  ├─ helmet-voice.service                   [DELETE]
+  └─ helmet.target                          [UPDATE or DELETE]
+
+deploy/docker/                               [Remove service containers]
+  ├─ Dockerfile.orchestrator                [DELETE]
+  ├─ Dockerfile.video                       [DELETE]
+  ├─ Dockerfile.perception                  [DELETE]
+  ├─ Dockerfile.voice                       [DELETE]
+  └─ docker-compose.yml                     [UPDATE to single service]
+
+================================================================================
+                        REFACTORING CHECKLIST
+================================================================================
+
+After removal, update visor-ui/main.py:
+
+  [ ] Replace video_client.py calls with direct_camera.py
+      Current: gRPC stub -> VideoService -> GetFrame()
+      New: import direct_camera.py -> DirectCamera.get_frame()
+
+  [ ] Replace perception_client.py with direct YOLO inference
+      Current: gRPC stub -> PerceptionService -> Infer()
+      New: import yolo_detector -> detector.infer()
+
+  [ ] Replace orchestrator_service.py calls with local state
+      Current: gRPC stub -> OrchestratorService -> ExecuteCommand()
+      New: LocalStateMachine -> execute_command()
+
+  [ ] Consolidate GPS handling
+      Current: gps_client.py -> gps_service.py (serial)
+      New: gps_client.py directly reads serial
+
+  [ ] Keep voice processing as-is (already local)
+      Current: openai_voice_assistant.py + voice_listener.py
+      Status: WORKING, NO CHANGE NEEDED
+
+  [ ] Update config.json
+      Remove: "services" section with ports 50051-50054
+      Keep: All camera, perception, voice, ui configurations
+
+================================================================================
+                            EXECUTION PHASES
+================================================================================
+
+PHASE 1: BACKUP & BRANCH (5 minutes)
+  git branch cleanup/remove-services
+  git add -A
+  git commit -m "backup: pre-cleanup state"
+
+PHASE 2: DELETE SERVICES (2 minutes)
+  rm -rf services/
+  rm -rf libs/messages/helmet*.py
+  rm apps/visor-ui/{video_client,perception_client,caption_client}.py
+
+PHASE 3: DELETE ARTIFACTS (5 minutes)
+  rm -rf .map_cache/
+  rm models/yolov4.weights
+  rm -rf logs/*
+  rm -rf recordings/*
+
+PHASE 4: UPDATE DEPLOYMENT (10 minutes)
+  rm deploy/docker/Dockerfile.{orchestrator,video,perception,voice}
+  rm deploy/systemd/helmet-{orchestrator,video,perception,voice}.service
+  Update deploy/docker/Dockerfile.ui (remove gRPC dependencies)
+  Update docker-compose.yml
+
+PHASE 5: REFACTOR UI (1-2 hours)
+  Update main.py to import and use:
+    - direct_camera instead of video_client
+    - Direct YOLO inference instead of perception_client
+    - Local state management instead of orchestrator_client
+  Test all hardware interfaces
+  Verify video, detection, voice, GPS functionality
+
+PHASE 6: DOCUMENTATION (30 minutes)
+  Update README.md architecture diagram
+  Update TECHNICAL_REVIEW.md
+  Add migration notes
+  Update deployment guide
+
+PHASE 7: FINAL TESTING (30 minutes)
+  Test full UI startup
+  Test camera feeds
+  Test AI detection
+  Test voice commands
+  Test GPS
+  Test recording
+  Check performance metrics
+
+PHASE 8: COMMIT & PUSH (5 minutes)
+  git add -A
+  git commit -m "refactor: remove microservices, consolidate to monolithic UI app"
+  git push origin cleanup/remove-services
+  Create pull request
+
+================================================================================
+                              IMPACT ANALYSIS
+================================================================================
+
+PROS:
+  ✓ Reduced codebase by 32% (2934 lines)
+  ✓ Simpler deployment (single process vs 5 services)
+  ✓ Lower latency (no IPC overhead)
+  ✓ Easier debugging (single stack trace)
+  ✓ Reduced memory footprint
+  ✓ Fewer Docker images to maintain
+  ✓ Unified error handling
+
+CONS:
+  ✗ Must refactor UI to call hardware directly
+  ✗ Loss of service isolation (but single-app anyway)
+  ✗ Potential for larger binary
+  ✗ Requires testing of refactored code
+
+RISK LEVEL: LOW
+  - UI already has direct hardware handlers
+  - Service clients are thin wrappers (simple to replace)
+  - No loss of functionality
+  - All hardware drivers remain the same
+
+================================================================================
+                          ESTIMATED EFFORT
+================================================================================
+
+Total Time: 3-4 hours
+
+  Cleanup/Deletion:          15 minutes
+  UI Refactoring:          90-120 minutes
+  Testing:                  30-45 minutes
+  Documentation:            30 minutes
+  Git/Cleanup:              15 minutes
+  ────────────────────────────────────
+  TOTAL:                    ~3.5 hours
+
+================================================================================

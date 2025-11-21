@@ -1,0 +1,184 @@
+HELMET PROJECT VISUAL STRUCTURE
+================================
+
+Current Architecture (Microservices):
+====================================
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Visor UI (Qt/QML)                        │
+│          apps/visor-ui/main.py [1064 lines]                 │
+│     Dual-eye compositor + AR overlays + HUD                 │
+└────────────────────┬────────────────────────────────────────┘
+                     │ gRPC calls
+         ┌───────────┼───────────┐
+         │           │           │
+    ┌────▼────┐  ┌──▼──────┐  ┌─▼────────────┐
+    │ Video   │  │Perception│  │ Voice       │
+    │ Service │  │ Service  │  │ Service     │
+    │ (50051) │  │ (50052)  │  │ (50053)     │
+    └────┬────┘  └──┬───────┘  └─┬──────────┘
+         │          │           │
+    ┌────▼──────────▼───────────▼──────┐
+    │      Orchestrator Service         │
+    │          (50054)                  │
+    │   System state + Telemetry        │
+    └──────────────────────────────────┘
+
+
+Target Architecture (Monolithic):
+=================================
+
+┌──────────────────────────────────────────────────────────┐
+│         Visor UI (Qt/QML + All Hardware)                 │
+│              apps/visor-ui/main.py                       │
+│                                                          │
+│  ├─ Direct Camera Interface                             │
+│  │  ├─ direct_camera.py                                 │
+│  │  └─ rear_camera.py                                   │
+│  │                                                      │
+│  ├─ AI Detection (Local YOLO)                          │
+│  │  └─ Direct inference in main.py                      │
+│  │                                                      │
+│  ├─ Voice Processing                                   │
+│  │  ├─ openai_voice_assistant.py                        │
+│  │  ├─ voice_listener.py                                │
+│  │  └─ wake_word_detector.py                            │
+│  │                                                      │
+│  ├─ IMU/Gyro Sensor                                    │
+│  │  └─ gyro_sensor.py                                   │
+│  │                                                      │
+│  ├─ GPS Positioning                                    │
+│  │  └─ gps_client.py                                    │
+│  │                                                      │
+│  ├─ Recording & Telemetry                              │
+│  │  ├─ full_recorder.py                                 │
+│  │  ├─ video_recorder.py                                │
+│  │  └─ system_monitor.py                                │
+│  │                                                      │
+│  └─ State Management (Local)                           │
+│     └─ hud_controller.py                                │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+         │
+    ┌────▼─────────┐
+    │ Shared Utils │
+    ├─ config.py   │
+    └─ logging_utils.py
+
+
+File Structure Tree (Current):
+==============================
+
+helmet/
+├── README.md .......................... Documentation
+├── TECHNICAL_REVIEW.md ............... Detailed design review
+├── requirements-jetson.txt ........... Dependencies
+│
+├── apps/
+│   └── visor-ui/
+│       ├── main.py ................... [1064 lines] KEEP
+│       ├── requirements.txt .......... Dependencies
+│       ├── qml/
+│       │   ├── main.qml ............. KEEP
+│       │   ├── HUDOverlay.qml ....... KEEP
+│       │   ├── DetectionOverlay.qml . KEEP
+│       │   └── ... (14 files total) . KEEP
+│       │
+│       ├── HARDWARE HANDLERS (KEEP ALL)
+│       ├── direct_camera.py ......... [238 lines] KEEP
+│       ├── rear_camera.py ........... [126 lines] KEEP
+│       ├── gyro_sensor.py ........... [275 lines] KEEP
+│       ├── gps_client.py ............ [257 lines] KEEP
+│       ├── wake_word_detector.py ... [398 lines] KEEP
+│       │
+│       ├── VOICE ASSISTANTS (KEEP ALL)
+│       ├── openai_voice_assistant.py [1099 lines] KEEP
+│       ├── voice_assistant.py ....... [280 lines] KEEP
+│       └── voice_listener.py ........ [155 lines] KEEP
+│
+├── services/ ......................... [2934 lines] DELETE ALL
+│   ├── orchestrator/ ................ [570 lines] DELETE
+│   ├── video/ ....................... [527 lines] DELETE
+│   ├── perception/ .................. [656 lines] DELETE
+│   ├── voice/ ....................... [555 lines] DELETE
+│   └── gps/ ......................... [626 lines] DELETE
+│
+├── libs/
+│   ├── utils/
+│   │   ├── config.py ................ KEEP
+│   │   └── logging_utils.py ......... KEEP
+│   └── messages/ .................... DELETE (gRPC definitions)
+│
+├── configs/
+│   └── profiles/
+│       ├── dev.json ................. KEEP
+│       ├── field.json ............... KEEP
+│       └── demo.json ................ KEEP
+│
+├── deploy/
+│   ├── docker/
+│   │   ├── Dockerfile.base .......... KEEP
+│   │   ├── Dockerfile.ui ............ KEEP
+│   │   ├── Dockerfile.orchestrator .. DELETE
+│   │   ├── Dockerfile.video ......... DELETE
+│   │   ├── Dockerfile.perception ... DELETE
+│   │   └── Dockerfile.voice ......... DELETE
+│   └── systemd/
+│       ├── helmet-ui.service ........ KEEP
+│       ├── helmet-orchestrator.service DELETE
+│       ├── helmet-video.service .... DELETE
+│       ├── helmet-perception.service DELETE
+│       └── helmet-voice.service .... DELETE
+│
+├── models/
+│   ├── yolov4.cfg ................... KEEP (reference)
+│   ├── coco.names ................... KEEP (reference)
+│   └── yolov4.weights ............... DELETE (45MB)
+│
+├── .map_cache/ ...................... DELETE (2000+ PNG tiles)
+├── logs/ ............................ CLEAN
+└── recordings/ ...................... CLEAN
+
+
+Code Statistics:
+================
+
+┌──────────────────────┬───────┬──────────┬────────────┐
+│ Component            │ Files │ Lines    │ Status     │
+├──────────────────────┼───────┼──────────┼────────────┤
+│ apps/visor-ui/       │  30   │  6,257   │ KEEP ALL   │
+│ services/            │   5   │  2,934   │ DELETE ALL │
+│ libs/utils/          │   2   │    200   │ KEEP       │
+│ libs/messages/       │   4   │    136   │ DELETE     │
+│ configs/             │   3   │  ~1000   │ KEEP       │
+│ deploy/              │  15   │  varies  │ PARTIAL    │
+│ Root tests/docs      │  20   │  varies  │ KEEP       │
+├──────────────────────┼───────┼──────────┼────────────┤
+│ TOTALS               │  79   │  9,527   │            │
+│ ─────────────────────┼───────┼──────────┼────────────┤
+│ KEEP                 │  60   │  7,400   │  78%       │
+│ DELETE               │  19   │  2,070   │  22%       │
+└──────────────────────┴───────┴──────────┴────────────┘
+
+
+Removal Impact:
+===============
+
+Size Reduction:
+  Current size: ~500+ MB (includes venv, models, cache)
+  After cleanup:
+    - Remove .map_cache/: -50 MB (generated tiles)
+    - Remove yolov4.weights: -45 MB (legacy model)
+    - Remove services/: -5 MB (code)
+    - Total savings: ~100 MB
+
+Code Reduction:
+  Current lines: 9,527
+  After cleanup: ~7,400
+  Reduction: ~22% smaller codebase
+
+Process Simplification:
+  FROM: 5 processes (video, perception, voice, orchestrator, ui)
+  TO: 1 process (ui with all functions)
+  Benefit: Simpler systemd config, lower overhead
+

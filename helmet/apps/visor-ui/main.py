@@ -10,6 +10,27 @@ from pathlib import Path
 from typing import Optional
 import os
 
+# Fix Qt plugin conflict with OpenCV - must be done BEFORE Qt imports
+# OpenCV sets QT_QPA_PLATFORM_PLUGIN_PATH which breaks PySide6
+
+# CRITICAL: Set Qt platform BEFORE importing cv2 or any Qt
+# Try linuxfb first (works on Jetson with framebuffer), fall back to offscreen
+# You can override with: export QT_QPA_PLATFORM=eglfs (or xcb if X11 is available)
+platform = os.environ.get('QT_QPA_PLATFORM', 'linuxfb')
+os.environ['QT_QPA_PLATFORM'] = platform
+print(f"Using Qt platform: {platform}")
+
+import cv2
+
+# Remove OpenCV's bad Qt plugin path
+if 'QT_QPA_PLATFORM_PLUGIN_PATH' in os.environ:
+    del os.environ['QT_QPA_PLATFORM_PLUGIN_PATH']
+
+# Set correct PySide6 plugin path
+import PySide6
+pyside6_plugins = str(Path(PySide6.__file__).parent / 'Qt' / 'plugins')
+os.environ['QT_PLUGIN_PATH'] = pyside6_plugins
+
 from PySide6.QtCore import QObject, Signal, QTimer, Property, QThread, QUrl, QSize, Slot
 from PySide6.QtGui import QGuiApplication, QImage, QPixmap
 from PySide6.QtQml import qmlRegisterType, QQmlApplicationEngine, QQmlImageProviderBase

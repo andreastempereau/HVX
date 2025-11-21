@@ -98,7 +98,7 @@ class WakeWordDetector:
             for test_rate in [self.native_rate, 16000, 48000, 44100]:
                 try:
                     chunk_native = int(CHUNK_16K * test_rate / TARGET_RATE)
-                    print(f"[Wake Word] Reopening audio at {test_rate}Hz...", flush=True)
+                    print(f"[Wake Word] Reopening audio at {test_rate}Hz on device {self.device_index}...", flush=True)
                     self.audio_stream = self.pyaudio_instance.open(
                         format=pyaudio.paInt16,
                         channels=1,
@@ -109,9 +109,11 @@ class WakeWordDetector:
                     )
                     self.native_rate = test_rate
                     self.needs_resampling = (test_rate != TARGET_RATE)
-                    print(f"[Wake Word] ✓ Audio reopened at {test_rate}Hz", flush=True)
+                    dev_info = self.pyaudio_instance.get_device_info_by_index(self.device_index)
+                    print(f"[Wake Word] ✓ Audio reopened at {test_rate}Hz on device '{dev_info['name']}'", flush=True)
                     break
                 except Exception as e:
+                    print(f"[Wake Word]   Failed to reopen at {test_rate}Hz: {e}", flush=True)
                     if test_rate == 44100:
                         print(f"[Wake Word] ERROR: Failed to reopen audio: {e}", flush=True)
                         raise
@@ -234,6 +236,50 @@ class WakeWordDetector:
             print(f"[Wake Word] PyAudio initialized", flush=True)
             sys.stdout.flush()
 
+            # Find a working input device (always scan, even if device_index is specified)
+            # This ensures we don't use a device that doesn't support mono audio
+            original_device = self.device_index
+            working_device = None
+
+            print(f"[Wake Word] Scanning for working audio input device...", flush=True)
+
+            # If device was specified, try it first
+            devices_to_try = []
+            if original_device is not None:
+                devices_to_try.append(original_device)
+
+            # Then try all other devices
+            for i in range(self.pyaudio_instance.get_device_count()):
+                if i not in devices_to_try:
+                    devices_to_try.append(i)
+
+            for i in devices_to_try:
+                try:
+                    dev_info = self.pyaudio_instance.get_device_info_by_index(i)
+                    if dev_info['maxInputChannels'] > 0:
+                        # Try to open this device
+                        test_stream = self.pyaudio_instance.open(
+                            format=pyaudio.paInt16,
+                            channels=1,
+                            rate=16000,
+                            input=True,
+                            input_device_index=i,
+                            frames_per_buffer=1280,
+                        )
+                        test_stream.close()
+                        working_device = i
+                        print(f"[Wake Word] ✓ Found working device {i}: {dev_info['name']}", flush=True)
+                        break
+                except Exception as e:
+                    continue
+
+            if working_device is None:
+                raise RuntimeError("No working audio input device found")
+
+            self.device_index = working_device
+            if original_device is not None and working_device != original_device:
+                print(f"[Wake Word] Note: Configured device {original_device} doesn't support mono audio, using device {working_device} instead", flush=True)
+
             # Try 16kHz first, then fallback to higher rates with resampling
             self.native_rate = TARGET_RATE
             self.needs_resampling = False
@@ -241,7 +287,7 @@ class WakeWordDetector:
             for test_rate in [16000, 48000, 44100]:
                 try:
                     chunk_native = int(CHUNK_16K * test_rate / TARGET_RATE)
-                    print(f"[Wake Word] Testing {test_rate}Hz...")
+                    print(f"[Wake Word] Testing {test_rate}Hz on device {self.device_index}...", flush=True)
                     self.audio_stream = self.pyaudio_instance.open(
                         format=pyaudio.paInt16,
                         channels=1,
@@ -252,9 +298,11 @@ class WakeWordDetector:
                     )
                     self.native_rate = test_rate
                     self.needs_resampling = (test_rate != TARGET_RATE)
-                    print(f"[Wake Word] ✓ Audio opened: {test_rate}Hz (resample={self.needs_resampling})")
+                    dev_info = self.pyaudio_instance.get_device_info_by_index(self.device_index)
+                    print(f"[Wake Word] ✓ Audio opened: {test_rate}Hz on device '{dev_info['name']}' (resample={self.needs_resampling})", flush=True)
                     break
                 except Exception as e:
+                    print(f"[Wake Word]   Failed at {test_rate}Hz: {e}", flush=True)
                     if test_rate == 44100:  # Last attempt
                         raise
                     continue

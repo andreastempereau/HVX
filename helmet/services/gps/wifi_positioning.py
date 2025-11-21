@@ -175,6 +175,16 @@ class WiFiPositioningService:
                     self._last_position = position
                     logger.info(f"Wi-Fi position: {lat:.6f}, {lon:.6f} (accuracy: ±{accuracy}m)")
                     return position
+            elif response.status_code == 404:
+                logger.error("Google Geolocation API returned 404 - API may not be enabled")
+                logger.error("Enable it at: https://console.cloud.google.com/apis/library/geolocation.googleapis.com")
+                return None
+            elif response.status_code == 403:
+                logger.error("Google Geolocation API returned 403 - Check API key permissions")
+                return None
+            elif response.status_code == 429:
+                logger.warning("Google Geolocation API rate limit exceeded - using cached position")
+                return self._last_position
             else:
                 logger.warning(f"Wi-Fi positioning API returned status {response.status_code}: {response.text}")
                 return None
