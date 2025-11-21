@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 from PySide6.QtCore import QObject, Signal, QTimer
 
-# Add services to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "services"))
-from gps.gps_service import GPSReader, GPSData
-from gps.wifi_positioning import WiFiPositioningService
+# Import GPS modules from local directory (moved from services/)
+from gps_service import GPSReader, GPSData
+from wifi_positioning import WiFiPositioningService
 
 logger = logging.getLogger(__name__)
 
