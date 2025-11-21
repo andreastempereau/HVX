@@ -173,48 +173,14 @@ def main():
         print("\nContinuing anyway (services may fail)...")
         time.sleep(2)
 
-    # Start services in order
-    services = [
-        ("Orchestrator", "services/orchestrator/orchestrator_service.py", 0),
-        ("Video Service", "services/video/video_service.py", 2),
-        ("Perception Service", "services/perception/perception_service.py", 4),
-        ("Voice Service", "services/voice/voice_service.py", 6),
-    ]
+    # Services removed - UI now runs standalone with direct hardware access
+    services = []
 
     print("\n" + "=" * 60)
-    print("Starting Services...")
+    print("Standalone Mode - No Backend Services")
     print("=" * 60)
-
-    # Start services in threads to handle delays
-    threads = []
-    for name, script, delay in services:
-        thread = threading.Thread(
-            target=start_service,
-            args=(name, script, delay),
-            daemon=True
-        )
-        thread.start()
-        threads.append(thread)
-
-    # Wait for initial startup
-    time.sleep(8)
-
-    print("\n" + "=" * 60)
-    print("Service Status:")
-    print("=" * 60)
-    for i, (name, _, _) in enumerate(services):
-        if i < len(processes) and processes[i].poll() is None:
-            print(f"  ✓ {name}: Running (PID: {processes[i].pid})")
-        else:
-            print(f"  ✗ {name}: Not running")
-
-    print("\n" + "=" * 60)
-    print("Service Endpoints:")
-    print("=" * 60)
-    print("  Orchestrator:  localhost:50054")
-    print("  Video:         localhost:50051")
-    print("  Perception:    localhost:52052")
-    print("  Voice:         localhost:50053")
+    print("All functionality runs directly in the UI application")
+    print("No separate backend services required")
 
     print("\n" + "=" * 60)
     print("Next Steps:")

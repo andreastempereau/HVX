@@ -6,9 +6,10 @@ import HelmetUI 1.0
 ApplicationWindow {
     id: window
     visible: true
-    width: 1440
-    height: 1440
+    width: 1920
+    height: 1080
     title: "Helmet Visor UI"
+    visibility: Window.FullScreen  // Start in fullscreen
 
     // Remove window decorations for fullscreen
     flags: Qt.FramelessWindowHint
@@ -17,35 +18,56 @@ ApplicationWindow {
     property bool systemReady: false
     property bool widgetsDeployed: false
     property int orientationUpdateCount: 0
+    property bool thermalActive: false
 
-    // Main content - fullscreen video
+    // Main content - single 16:9 display
     Rectangle {
+        id: mainDisplay
         anchors.fill: parent
         color: "black"
         visible: window.systemReady
 
-        // Single fullscreen video
+        // Camera feed - COMMENTED OUT / DISABLED
+        /*
         Image {
-            id: fullscreenVideo
+            id: videoFeed
             anchors.fill: parent
-            fillMode: Image.PreserveAspectCrop
+            fillMode: Image.PreserveAspectFit
             cache: false
-            asynchronous: false  // Synchronous for lower latency
-            smooth: false        // Disable smoothing for performance
+            asynchronous: false
+            smooth: false
 
             function updateFrame(framePath) {
                 source = framePath
             }
         }
+        */
+
+        // Thermal camera overlay (full screen)
+        Image {
+            id: thermalFeed
+            anchors.fill: parent
+            fillMode: Image.PreserveAspectFit
+            cache: false
+            asynchronous: false
+            smooth: false
+            visible: window.thermalActive
+            z: 1  // Above black background, below widgets
+
+            function updateThermalFrame(framePath) {
+                source = framePath
+            }
+        }
     }
 
-    // MINIMAL persistent status (top-right corner only)
+    // Minimal status (top-right)
     MinimalStatus {
         id: minimalStatus
+        parent: mainDisplay
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 10
-        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
+        visible: window.systemReady && currentHUDPreset !== 1
     }
 
     // Startup screen - shown initially
@@ -64,12 +86,11 @@ ApplicationWindow {
     // HUD overlay with deployment animation
     HUDOverlay {
         id: detailedHUD
+        parent: mainDisplay
         anchors.fill: parent
-        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
+        visible: window.systemReady && currentHUDPreset !== 1
         opacity: window.systemReady && window.widgetsDeployed && currentHUDPreset !== 1 ? 0.8 : 0
         enabled: window.systemReady
-
-        // Widget deployment properties
         property bool deploying: false
 
         Behavior on opacity {
@@ -103,9 +124,10 @@ ApplicationWindow {
 
     }
 
-    // Voice feedback overlay (appears during voice interaction)
+    // Voice feedback overlay
     VoiceOverlay {
         id: voiceOverlay
+        parent: mainDisplay
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottomMargin: 50
@@ -113,9 +135,10 @@ ApplicationWindow {
         enabled: window.systemReady
     }
 
-    // Detection overlay (shows/hides based on voice commands)
+    // Detection overlay
     DetectionOverlay {
         id: detectionOverlay
+        parent: mainDisplay
         anchors.fill: parent
         visible: false
         opacity: 0
@@ -125,33 +148,38 @@ ApplicationWindow {
     // Snapshot analysis widget
     SnapshotAnalysis {
         id: snapshotAnalysis
+        parent: mainDisplay
         enabled: window.systemReady
     }
 
     // Closed captions widget
     ClosedCaptions {
         id: closedCaptions
+        parent: mainDisplay
         enabled: window.systemReady
     }
 
     // Orientation crosshair
     OrientationCrosshair {
         id: orientationCrosshair
-        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
-        z: 100  // Above video but below overlays
+        parent: mainDisplay
+        anchors.fill: parent
+        visible: window.systemReady && currentHUDPreset !== 1
+        z: 100
     }
 
     // GPS Minimap (bottom-left corner)
     Minimap {
         id: minimap
+        parent: mainDisplay
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.leftMargin: 20
         anchors.bottomMargin: 20
         width: 300
         height: 300
-        visible: window.systemReady && currentHUDPreset !== 1  // Hide in clear mode
-        z: 200  // Above HUD but below overlays
+        visible: window.systemReady && currentHUDPreset !== 1
+        z: 800
     }
 
     // HUD Preset Wheel (always enabled, even in clear mode)
@@ -180,6 +208,7 @@ ApplicationWindow {
         Keys.onPressed: function(event) {
             switch (event.key) {
                 case Qt.Key_Escape:
+                case Qt.Key_S:  // 'S' key also quits
                     Qt.quit()
                     break
                 case Qt.Key_F:
@@ -188,6 +217,13 @@ ApplicationWindow {
                     } else {
                         window.showFullScreen()
                     }
+                    break
+                case Qt.Key_T:  // 'T' key toggles thermal overlay
+                    window.thermalActive = !window.thermalActive
+                    visorApp.toggleThermal()
+                    break
+                case Qt.Key_N:  // 'N' key triggers thermal NUC calibration
+                    visorApp.triggerThermalNUC()
                     break
                 case Qt.Key_H:
                     toggleDetailedHUD()
@@ -214,13 +250,16 @@ ApplicationWindow {
         target: visorApp
 
         function onFrameUpdated(framePath) {
-            fullscreenVideo.updateFrame(framePath)
+            // Camera feed disabled - do nothing
+            // videoFeed.updateFrame(framePath)
+        }
+
+        function onThermalFrameUpdated(framePath) {
+            thermalFeed.updateThermalFrame(framePath)
         }
 
         function onDetectionsUpdated(detections) {
-            // Always update detection overlay (it will handle visibility internally)
             detectionOverlay.updateDetections(detections)
-            // Always update HUD with detections for facial recognition and object badges
             detailedHUD.updateDetections(detections)
         }
 
@@ -248,7 +287,7 @@ ApplicationWindow {
             orientationCrosshair.rollAngle = rollAngle
             orientationCrosshair.pitchAngle = pitchAngle
 
-            // Update preset wheel with orientation (pass heading, roll, pitch)
+            // Update preset wheel with orientation
             hudPresetWheel.updateOrientation(headingAngle, rollAngle, pitchAngle)
         }
     }
@@ -281,7 +320,9 @@ ApplicationWindow {
     }
 
     function toggleDetailedHUD() {
-        if (detailedHUD.visible && detailedHUD.opacity > 0) {
+        var shouldHide = (detailedHUD.visible && detailedHUD.opacity > 0)
+
+        if (shouldHide) {
             detailedHUD.opacity = 0
             detailedHUD.visible = false
         } else {
@@ -291,7 +332,9 @@ ApplicationWindow {
     }
 
     function toggleDetections() {
-        if (detectionOverlay.visible) {
+        var shouldHide = detectionOverlay.visible
+
+        if (shouldHide) {
             detectionOverlay.opacity = 0
             detectionOverlay.visible = false
         } else {
@@ -302,8 +345,8 @@ ApplicationWindow {
 
     function hideAllOverlays() {
         detailedHUD.visible = false
-        detectionOverlay.visible = false
         detailedHUD.opacity = 0
+        detectionOverlay.visible = false
         detectionOverlay.opacity = 0
     }
 
@@ -317,7 +360,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         keyHandler.forceActiveFocus()
-        // Ensure window starts in normal (non-fullscreen) mode
-        window.visibility = Window.Windowed
+        // Start in fullscreen mode
+        window.visibility = Window.FullScreen
     }
 }

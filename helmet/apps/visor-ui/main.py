@@ -10,6 +10,27 @@ from pathlib import Path
 from typing import Optional
 import os
 
+# Fix Qt plugin conflict with OpenCV - must be done BEFORE Qt imports
+# OpenCV sets QT_QPA_PLATFORM_PLUGIN_PATH which breaks PySide6
+
+# CRITICAL: Set Qt platform BEFORE importing cv2 or any Qt
+# Try linuxfb first (works on Jetson with framebuffer), fall back to offscreen
+# You can override with: export QT_QPA_PLATFORM=eglfs (or xcb if X11 is available)
+platform = os.environ.get('QT_QPA_PLATFORM', 'linuxfb')
+os.environ['QT_QPA_PLATFORM'] = platform
+print(f"Using Qt platform: {platform}")
+
+import cv2
+
+# Remove OpenCV's bad Qt plugin path
+if 'QT_QPA_PLATFORM_PLUGIN_PATH' in os.environ:
+    del os.environ['QT_QPA_PLATFORM_PLUGIN_PATH']
+
+# Set correct PySide6 plugin path
+import PySide6
+pyside6_plugins = str(Path(PySide6.__file__).parent / 'Qt' / 'plugins')
+os.environ['QT_PLUGIN_PATH'] = pyside6_plugins
+
 from PySide6.QtCore import QObject, Signal, QTimer, Property, QThread, QUrl, QSize, Slot
 from PySide6.QtGui import QGuiApplication, QImage, QPixmap
 from PySide6.QtQml import qmlRegisterType, QQmlApplicationEngine, QQmlImageProviderBase
@@ -31,13 +52,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "libs"))
 from utils.config import get_config
 from utils.logging_utils import setup_logging
 
-from video_client import VideoClient
-from perception_client import PerceptionClient
 from hud_controller import HUDController
 from voice_listener import VoiceListener
-from caption_client import CaptionClient
 # from rear_camera import RearCamera  # Kept for future use, not currently in HUD
 from direct_camera import DirectCamera  # Native GStreamer for main camera
+from thermal_camera import ThermalCamera  # FLIR Boson thermal camera
 from openai_voice_assistant import OpenAIRealtimeAssistant
 from wake_word_detector import WakeWordDetector
 from gyro_sensor import GyroSensor
@@ -79,6 +98,7 @@ class VisorApp(QObject):
 
     # Signals for QML
     frameUpdated = Signal(str)  # Now passes image path
+    thermalFrameUpdated = Signal(str)  # Thermal camera image path
     detectionsUpdated = Signal('QVariantList')
     hudStatusUpdated = Signal('QVariantMap')
     snapshotAnalyzed = Signal(str, str)  # snapshot path, analysis text
@@ -94,6 +114,9 @@ class VisorApp(QObject):
         self.config = config
         self.video_client = None
         self.direct_camera = None  # Direct GStreamer camera
+        self.thermal_camera = None  # FLIR thermal camera
+        self.thermal_enabled = False  # Thermal overlay toggle
+        self.thermal_counter = 0  # Frame counter for thermal
         self.perception_client = None
         self.hud_controller = None
         self.running = False
@@ -200,11 +223,10 @@ class VisorApp(QObject):
                 print("⚠ Dual camera failed to initialize")
                 self.direct_camera = None
 
-            # Perception client
-            perception_port = self.config.get('services.perception_port', 50052)
-            print(f"Connecting to perception service at localhost:{perception_port}")
-            self.perception_client = PerceptionClient(f'localhost:{perception_port}')
-            print("Perception client connected")
+            # Perception client - REMOVED (using direct inference now)
+            # TODO: Add direct YOLO inference here
+            self.perception_client = None
+            print("Perception: Using direct inference (service removed)")
 
             # HUD controller (pass system monitor for real telemetry)
             self.hud_controller = HUDController(self.config, system_monitor=self.system_monitor)
@@ -221,6 +243,10 @@ class VisorApp(QObject):
         # Frame update timer
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self._update_frame)
+
+        # Thermal frame timer (only runs when enabled)
+        self.thermal_timer = QTimer()
+        self.thermal_timer.timeout.connect(self._update_thermal_frame)
 
         # HUD update timer
         self.hud_timer = QTimer()
@@ -257,14 +283,11 @@ class VisorApp(QObject):
             # Get microphone device from config (use card 0 for Razer Kiyo X)
             mic_device = self.config.get('caption.mic_device_index', 0)
 
-            print(f"Initializing caption client with mic device: {mic_device}")
-            self.caption_client = CaptionClient(
-                deepgram_api_key=deepgram_key,
-                device_index=mic_device,
-                parent_app=self  # Pass self for Qt signal access
-            )
-            logger.info("Caption client initialized")
-            print("✓ Caption client initialized successfully")
+            # Caption client - REMOVED (service deleted)
+            # TODO: Re-implement direct Deepgram WebSocket client if needed
+            self.caption_client = None
+            logger.info("Caption client disabled (service removed)")
+            print("⚠ Caption client disabled (service removed)")
 
         except Exception as e:
             import traceback
@@ -711,6 +734,36 @@ class VisorApp(QObject):
             print(f"Frame update error: {e}")
             logger.error(f"Frame update error: {e}")
 
+    def _update_thermal_frame(self):
+        """Update thermal camera frame (only called when thermal is enabled)"""
+        if not self.thermal_camera or not self.thermal_enabled:
+            return
+
+        try:
+            # Get thermal frame
+            frame = self.thermal_camera.get_frame()
+            if frame is None:
+                return
+
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Convert to QImage
+            height, width, channels = rgb_frame.shape
+            bytes_per_line = channels * width
+            qimage = QImage(rgb_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+
+            # Update image provider
+            if self.image_provider:
+                self.image_provider.setImage(qimage)
+
+            # Emit signal for thermal (use same image provider, just different signal)
+            self.thermalFrameUpdated.emit(f"image://video/{self.thermal_counter}")
+            self.thermal_counter += 1
+
+        except Exception as e:
+            logger.error(f"Thermal frame update error: {e}")
+
     def _run_perception_async(self, frame_meta):
         """Run perception inference asynchronously"""
         def run_perception():
@@ -845,6 +898,40 @@ class VisorApp(QObject):
     def get_current_camera_frame(self):
         """Get current camera frame QImage (for on-demand vision queries)"""
         return self._current_qimage
+
+    @Slot()
+    def toggleThermal(self):
+        """Toggle thermal camera overlay"""
+        self.thermal_enabled = not self.thermal_enabled
+
+        if self.thermal_enabled:
+            print("[Thermal] Enabling thermal overlay")
+            # Initialize thermal camera if not already done
+            if not self.thermal_camera:
+                self.thermal_camera = ThermalCamera(device='/dev/video2', width=640, height=512)
+                if not self.thermal_camera.start():
+                    print("[Thermal] Failed to start thermal camera")
+                    self.thermal_enabled = False
+                    return
+
+            # Start thermal update timer (30 FPS for low latency)
+            self.thermal_timer.start(33)  # ~30 FPS
+        else:
+            print("[Thermal] Disabling thermal overlay")
+            # Stop thermal timer
+            self.thermal_timer.stop()
+
+        logger.info(f"Thermal overlay: {'enabled' if self.thermal_enabled else 'disabled'}")
+
+    @Slot()
+    def triggerThermalNUC(self):
+        """Trigger NUC (Non-Uniformity Correction) on thermal camera"""
+        if self.thermal_camera:
+            print("[Thermal] Triggering NUC calibration...")
+            self.thermal_camera.trigger_nuc()
+        else:
+            print("[Thermal] Cannot trigger NUC - thermal camera not initialized")
+            logger.warning("NUC trigger requested but thermal camera not active")
 
     @Slot()
     def captureAndAnalyze(self):

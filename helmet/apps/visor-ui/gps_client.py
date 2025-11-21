@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 from PySide6.QtCore import QObject, Signal, QTimer
 
-# Add services to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "services"))
-from gps.gps_service import GPSReader, GPSData
-from gps.wifi_positioning import WiFiPositioningService
+# Import GPS modules from local directory (moved from services/)
+from gps_service import GPSReader, GPSData
+from wifi_positioning import WiFiPositioningService
 
 logger = logging.getLogger(__name__)
 
@@ -51,22 +50,49 @@ class GPSClient(QObject):
         self.last_positioning_method = "none"  # "gps", "wifi", "ip", "none"
         self.gps_fix_lost_count = 0  # Count updates without GPS fix
 
+        # WiFi positioning cache (only update every 30 seconds)
+        self.wifi_update_interval = 30  # seconds
+        self.wifi_last_update_count = -999  # Force first update
+
     def start(self) -> bool:
         """Start GPS reader and updates"""
         try:
-            if self.gps_reader.start():
-                logger.info("GPS client started")
-                self.running = True
+            # Try to start GPS hardware
+            gps_started = False
+            try:
+                gps_started = self.gps_reader.start()
+                if gps_started:
+                    logger.info("GPS hardware started successfully")
+                else:
+                    logger.warning("GPS hardware failed to start")
+            except Exception as e:
+                logger.warning(f"GPS hardware error: {e}")
 
-                # Start update timer (2 Hz for GPS updates)
+            # Always start the update timer, even if GPS hardware failed
+            # This allows Wi-Fi fallback to work
+            if gps_started or self.use_wifi_fallback:
+                self.running = True
                 self.update_timer.start(500)  # 500ms = 2 Hz
+
+                if not gps_started and self.use_wifi_fallback:
+                    logger.info("GPS hardware unavailable, using Wi-Fi positioning fallback")
+                    # Set fix_lost_count to trigger immediate Wi-Fi fallback
+                    self.gps_fix_lost_count = 5
+
                 return True
             else:
-                logger.error("Failed to start GPS reader")
+                logger.error("GPS hardware unavailable and no Wi-Fi fallback configured")
                 return False
 
         except Exception as e:
             logger.error(f"GPS client start error: {e}")
+            # If Wi-Fi fallback is available, still try to start
+            if self.use_wifi_fallback:
+                logger.info("Starting with Wi-Fi positioning only")
+                self.running = True
+                self.update_timer.start(500)
+                self.gps_fix_lost_count = 5  # Trigger immediate Wi-Fi fallback
+                return True
             return False
 
     def stop(self):
@@ -133,12 +159,30 @@ class GPSClient(QObject):
                 # Wait 5 updates (10 seconds) before switching to Wi-Fi
                 # This avoids unnecessary Wi-Fi lookups during brief GPS dropouts
                 if self.gps_fix_lost_count >= 5 and self.use_wifi_fallback:
-                    # Try Wi-Fi positioning (no IP fallback)
-                    wifi_position = self.wifi_positioning.get_position_from_wifi()
+                    # Only call WiFi API every 30 seconds (60 updates at 500ms = 30s)
+                    # This prevents excessive API calls and quota exhaustion
+                    updates_since_wifi = self.gps_fix_lost_count - self.wifi_last_update_count
+                    wifi_update_threshold = self.wifi_update_interval * 2  # 2 Hz update rate
+
+                    if updates_since_wifi >= wifi_update_threshold:
+                        # Try Wi-Fi positioning first, then IP fallback
+                        wifi_position = self.wifi_positioning.get_position_from_wifi()
+                        positioning_method = "wifi"
+
+                        # If WiFi fails, try IP geolocation as last resort
+                        if not wifi_position:
+                            logger.info("WiFi positioning failed, trying IP geolocation")
+                            wifi_position = self.wifi_positioning.get_position_from_ip()
+                            positioning_method = "ip" if wifi_position else "none"
+
+                        self.wifi_last_update_count = self.gps_fix_lost_count
+                    else:
+                        # Use cached position
+                        wifi_position = self.wifi_positioning.get_last_position()
+                        positioning_method = "wifi" if wifi_position else "none"
 
                     if wifi_position:
                         lat, lon, accuracy = wifi_position
-                        positioning_method = "wifi"
 
                         # Only update if position changed
                         position_changed = (
