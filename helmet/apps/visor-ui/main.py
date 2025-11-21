@@ -56,6 +56,7 @@ from hud_controller import HUDController
 from voice_listener import VoiceListener
 # from rear_camera import RearCamera  # Kept for future use, not currently in HUD
 from direct_camera import DirectCamera  # Native GStreamer for main camera
+from thermal_camera import ThermalCamera  # FLIR Boson thermal camera
 from openai_voice_assistant import OpenAIRealtimeAssistant
 from wake_word_detector import WakeWordDetector
 from gyro_sensor import GyroSensor
@@ -97,6 +98,7 @@ class VisorApp(QObject):
 
     # Signals for QML
     frameUpdated = Signal(str)  # Now passes image path
+    thermalFrameUpdated = Signal(str)  # Thermal camera image path
     detectionsUpdated = Signal('QVariantList')
     hudStatusUpdated = Signal('QVariantMap')
     snapshotAnalyzed = Signal(str, str)  # snapshot path, analysis text
@@ -112,6 +114,9 @@ class VisorApp(QObject):
         self.config = config
         self.video_client = None
         self.direct_camera = None  # Direct GStreamer camera
+        self.thermal_camera = None  # FLIR thermal camera
+        self.thermal_enabled = False  # Thermal overlay toggle
+        self.thermal_counter = 0  # Frame counter for thermal
         self.perception_client = None
         self.hud_controller = None
         self.running = False
@@ -238,6 +243,10 @@ class VisorApp(QObject):
         # Frame update timer
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self._update_frame)
+
+        # Thermal frame timer (only runs when enabled)
+        self.thermal_timer = QTimer()
+        self.thermal_timer.timeout.connect(self._update_thermal_frame)
 
         # HUD update timer
         self.hud_timer = QTimer()
@@ -725,6 +734,36 @@ class VisorApp(QObject):
             print(f"Frame update error: {e}")
             logger.error(f"Frame update error: {e}")
 
+    def _update_thermal_frame(self):
+        """Update thermal camera frame (only called when thermal is enabled)"""
+        if not self.thermal_camera or not self.thermal_enabled:
+            return
+
+        try:
+            # Get thermal frame
+            frame = self.thermal_camera.get_frame()
+            if frame is None:
+                return
+
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Convert to QImage
+            height, width, channels = rgb_frame.shape
+            bytes_per_line = channels * width
+            qimage = QImage(rgb_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+
+            # Update image provider
+            if self.image_provider:
+                self.image_provider.setImage(qimage)
+
+            # Emit signal for thermal (use same image provider, just different signal)
+            self.thermalFrameUpdated.emit(f"image://video/{self.thermal_counter}")
+            self.thermal_counter += 1
+
+        except Exception as e:
+            logger.error(f"Thermal frame update error: {e}")
+
     def _run_perception_async(self, frame_meta):
         """Run perception inference asynchronously"""
         def run_perception():
@@ -859,6 +898,30 @@ class VisorApp(QObject):
     def get_current_camera_frame(self):
         """Get current camera frame QImage (for on-demand vision queries)"""
         return self._current_qimage
+
+    @Slot()
+    def toggleThermal(self):
+        """Toggle thermal camera overlay"""
+        self.thermal_enabled = not self.thermal_enabled
+
+        if self.thermal_enabled:
+            print("[Thermal] Enabling thermal overlay")
+            # Initialize thermal camera if not already done
+            if not self.thermal_camera:
+                self.thermal_camera = ThermalCamera(device='/dev/video2', width=640, height=512)
+                if not self.thermal_camera.start():
+                    print("[Thermal] Failed to start thermal camera")
+                    self.thermal_enabled = False
+                    return
+
+            # Start thermal update timer (30 FPS for low latency)
+            self.thermal_timer.start(33)  # ~30 FPS
+        else:
+            print("[Thermal] Disabling thermal overlay")
+            # Stop thermal timer
+            self.thermal_timer.stop()
+
+        logger.info(f"Thermal overlay: {'enabled' if self.thermal_enabled else 'disabled'}")
 
     @Slot()
     def captureAndAnalyze(self):

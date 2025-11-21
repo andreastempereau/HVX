@@ -18,6 +18,7 @@ ApplicationWindow {
     property bool systemReady: false
     property bool widgetsDeployed: false
     property int orientationUpdateCount: 0
+    property bool thermalActive: false
 
     // Main content - single 16:9 display
     Rectangle {
@@ -41,6 +42,22 @@ ApplicationWindow {
             }
         }
         */
+
+        // Thermal camera overlay (full screen)
+        Image {
+            id: thermalFeed
+            anchors.fill: parent
+            fillMode: Image.PreserveAspectFit
+            cache: false
+            asynchronous: false
+            smooth: false
+            visible: window.thermalActive
+            z: 1  // Above black background, below widgets
+
+            function updateThermalFrame(framePath) {
+                source = framePath
+            }
+        }
     }
 
     // Minimal status (top-right)
@@ -201,6 +218,10 @@ ApplicationWindow {
                         window.showFullScreen()
                     }
                     break
+                case Qt.Key_T:  // 'T' key toggles thermal overlay
+                    window.thermalActive = !window.thermalActive
+                    visorApp.toggleThermal()
+                    break
                 case Qt.Key_H:
                     toggleDetailedHUD()
                     break
@@ -228,6 +249,10 @@ ApplicationWindow {
         function onFrameUpdated(framePath) {
             // Camera feed disabled - do nothing
             // videoFeed.updateFrame(framePath)
+        }
+
+        function onThermalFrameUpdated(framePath) {
+            thermalFeed.updateThermalFrame(framePath)
         }
 
         function onDetectionsUpdated(detections) {
