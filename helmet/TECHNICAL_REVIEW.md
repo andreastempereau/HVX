@@ -3,7 +3,7 @@
 ## EXECUTIVE SUMMARY
 
 **Project Name:** Helmet OS - AR/VR Vision System
-**Version:** 2.0.0
+**Version:** 2.0.2
 **Platform:** NVIDIA Jetson Orin Nano (ARM64, Ubuntu 22.04, JetPack 6.x)
 **Total Codebase:** 6,141+ lines of Python, 34 Python modules, extensive QML UI
 **Architecture:** Microservices-based with gRPC inter-process communication

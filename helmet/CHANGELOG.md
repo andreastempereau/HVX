@@ -2,6 +2,15 @@
 
 All notable changes to Helmet OS will be documented in this file.
 
+## [2.0.2] - 2025-11-20
+
+### 🐛 Bug Fixes
+
+- **Claude API model update** - Fixed 404 error from deprecated model `claude-3-5-sonnet-20241022`
+  - Updated to `claude-3-5-sonnet-latest` for automatic version tracking
+  - P key snapshot analysis now works correctly
+- **Improved error tracing** - Added full traceback output for Claude API errors to aid debugging
+
 ## [2.0.0] - 2025-11-20
 
 ### 🎯 Major Architectural Changes
