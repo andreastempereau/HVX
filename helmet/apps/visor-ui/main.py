@@ -924,6 +924,16 @@ class VisorApp(QObject):
         logger.info(f"Thermal overlay: {'enabled' if self.thermal_enabled else 'disabled'}")
 
     @Slot()
+    def triggerThermalNUC(self):
+        """Trigger NUC (Non-Uniformity Correction) on thermal camera"""
+        if self.thermal_camera:
+            print("[Thermal] Triggering NUC calibration...")
+            self.thermal_camera.trigger_nuc()
+        else:
+            print("[Thermal] Cannot trigger NUC - thermal camera not initialized")
+            logger.warning("NUC trigger requested but thermal camera not active")
+
+    @Slot()
     def captureAndAnalyze(self):
         """Capture current frame and analyze with Claude API"""
         print("\n" + "="*60)

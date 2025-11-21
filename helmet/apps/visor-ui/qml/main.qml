@@ -222,6 +222,9 @@ ApplicationWindow {
                     window.thermalActive = !window.thermalActive
                     visorApp.toggleThermal()
                     break
+                case Qt.Key_N:  // 'N' key triggers thermal NUC calibration
+                    visorApp.triggerThermalNUC()
+                    break
                 case Qt.Key_H:
                     toggleDetailedHUD()
                     break
