@@ -52,11 +52,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "libs"))
 from utils.config import get_config
 from utils.logging_utils import setup_logging
 
-from video_client import VideoClient
-from perception_client import PerceptionClient
 from hud_controller import HUDController
 from voice_listener import VoiceListener
-from caption_client import CaptionClient
 # from rear_camera import RearCamera  # Kept for future use, not currently in HUD
 from direct_camera import DirectCamera  # Native GStreamer for main camera
 from openai_voice_assistant import OpenAIRealtimeAssistant
@@ -221,11 +218,10 @@ class VisorApp(QObject):
                 print("⚠ Dual camera failed to initialize")
                 self.direct_camera = None
 
-            # Perception client
-            perception_port = self.config.get('services.perception_port', 50052)
-            print(f"Connecting to perception service at localhost:{perception_port}")
-            self.perception_client = PerceptionClient(f'localhost:{perception_port}')
-            print("Perception client connected")
+            # Perception client - REMOVED (using direct inference now)
+            # TODO: Add direct YOLO inference here
+            self.perception_client = None
+            print("Perception: Using direct inference (service removed)")
 
             # HUD controller (pass system monitor for real telemetry)
             self.hud_controller = HUDController(self.config, system_monitor=self.system_monitor)
@@ -278,14 +274,11 @@ class VisorApp(QObject):
             # Get microphone device from config (use card 0 for Razer Kiyo X)
             mic_device = self.config.get('caption.mic_device_index', 0)
 
-            print(f"Initializing caption client with mic device: {mic_device}")
-            self.caption_client = CaptionClient(
-                deepgram_api_key=deepgram_key,
-                device_index=mic_device,
-                parent_app=self  # Pass self for Qt signal access
-            )
-            logger.info("Caption client initialized")
-            print("✓ Caption client initialized successfully")
+            # Caption client - REMOVED (service deleted)
+            # TODO: Re-implement direct Deepgram WebSocket client if needed
+            self.caption_client = None
+            logger.info("Caption client disabled (service removed)")
+            print("⚠ Caption client disabled (service removed)")
 
         except Exception as e:
             import traceback
