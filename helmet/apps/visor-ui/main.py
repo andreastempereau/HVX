@@ -1017,7 +1017,7 @@ To enable AI analysis:
             client = anthropic.Anthropic(api_key=api_key)
 
             message = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-5-sonnet-latest",
                 max_tokens=1024,
                 messages=[
                     {
@@ -1056,9 +1056,13 @@ Or if using venv:
             print(error_msg)
             return error_msg
         except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
             logger.error(f"Claude API error: {e}")
-            error_msg = f"Analysis error: {str(e)}"
-            print(error_msg)
+            logger.error(f"Full traceback:\n{error_trace}")
+            print(f"ERROR: Claude API call failed:")
+            print(error_trace)
+            error_msg = f"Analysis error: {str(e)}\n\nCheck terminal for full error details."
             return error_msg
 
 def main():
