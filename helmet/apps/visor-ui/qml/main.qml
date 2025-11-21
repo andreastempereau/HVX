@@ -9,6 +9,7 @@ ApplicationWindow {
     width: 1920
     height: 1080
     title: "Helmet Visor UI"
+    visibility: Window.FullScreen  // Start in fullscreen
 
     // Remove window decorations for fullscreen
     flags: Qt.FramelessWindowHint
@@ -190,6 +191,7 @@ ApplicationWindow {
         Keys.onPressed: function(event) {
             switch (event.key) {
                 case Qt.Key_Escape:
+                case Qt.Key_S:  // 'S' key also quits
                     Qt.quit()
                     break
                 case Qt.Key_F:
@@ -330,7 +332,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         keyHandler.forceActiveFocus()
-        // Ensure window starts in normal (non-fullscreen) mode
-        window.visibility = Window.Windowed
+        // Start in fullscreen mode
+        window.visibility = Window.FullScreen
     }
 }
