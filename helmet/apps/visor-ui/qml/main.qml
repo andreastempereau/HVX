@@ -135,13 +135,13 @@ ApplicationWindow {
         enabled: window.systemReady
     }
 
-    // Detection overlay
+    // Detection overlay (person detection enabled)
     DetectionOverlay {
         id: detectionOverlay
         parent: mainDisplay
         anchors.fill: parent
-        visible: false
-        opacity: 0
+        visible: true
+        opacity: 1.0
         enabled: window.systemReady
     }
 

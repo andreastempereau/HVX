@@ -125,10 +125,19 @@ class VisorApp(QObject):
 
         # Frame processing
         self._current_frame = None
+        self._right_camera_frame = None  # Right camera for snapshots
         self._current_detections = []
         self._current_qimage = None
         self._shared_qimage = None
         self.image_provider = image_provider
+
+        # YOLO person detection
+        self.yolo_model = None
+        self.detection_frame_skip = 9  # Process every Nth frame (at 30fps: 9 = ~3.3 detections/sec)
+        self.detection_frame_counter = 0
+        # Camera offset compensation (camera mounted above and to the left of bridge of nose)
+        self.camera_vertical_offset_px = 80  # 2-inch camera offset above eyeline (shift detections DOWN)
+        self.camera_horizontal_offset_px = 0  # Horizontal offset (shift LEFT if camera is left of center)
 
         # Voice listener
         self.voice_listener = None
@@ -224,7 +233,81 @@ class VisorApp(QObject):
                 self.direct_camera = None
 
             # Perception client - REMOVED (using direct inference now)
-            # TODO: Add direct YOLO inference here
+            # Initialize YOLO model for person-only detection
+            try:
+                import torch
+                from ultralytics import YOLO
+
+                # Fix PyTorch 2.6+ weights_only security issue
+                # Add ultralytics classes to safe globals for model loading
+                try:
+                    import ultralytics.nn.tasks
+                    import ultralytics.nn.modules
+
+                    # Add all ultralytics model and module classes to safe globals
+                    safe_classes = [
+                        ultralytics.nn.tasks.DetectionModel,
+                        ultralytics.nn.tasks.SegmentationModel,
+                        ultralytics.nn.tasks.ClassificationModel,
+                    ]
+
+                    # Try to add additional classes if they exist
+                    try:
+                        safe_classes.extend([
+                            ultralytics.nn.tasks.PoseModel,
+                            ultralytics.nn.tasks.OBBModel,
+                        ])
+                    except AttributeError:
+                        pass  # Older ultralytics version
+
+                    # Add common nn modules
+                    for name in dir(ultralytics.nn.modules):
+                        obj = getattr(ultralytics.nn.modules, name)
+                        if isinstance(obj, type):
+                            safe_classes.append(obj)
+
+                    torch.serialization.add_safe_globals(safe_classes)
+                    print(f"[DETECTION] Added {len(safe_classes)} ultralytics classes to PyTorch safe globals")
+                except Exception as e:
+                    print(f"[DETECTION] Note: Could not add safe globals (PyTorch < 2.6?): {e}")
+
+                model_path = self.config.get('perception.model_path', 'yolov8n.pt')
+                print(f"[DETECTION] Loading YOLO model from {model_path}...")
+                logger.info(f"Loading YOLO model from {model_path}")
+
+                # Try loading with safe globals first, fallback to weights_only=False
+                try:
+                    self.yolo_model = YOLO(model_path)
+                except Exception as load_error:
+                    print(f"[DETECTION] First load attempt failed: {load_error}")
+                    print("[DETECTION] Attempting fallback: patching torch.load with weights_only=False")
+
+                    # Monkeypatch torch.load to use weights_only=False for this model
+                    original_load = torch.load
+                    def patched_load(*args, **kwargs):
+                        kwargs['weights_only'] = False
+                        return original_load(*args, **kwargs)
+
+                    torch.load = patched_load
+                    try:
+                        self.yolo_model = YOLO(model_path)
+                    finally:
+                        torch.load = original_load  # Restore original
+                    print("[DETECTION] Successfully loaded with fallback method")
+                # Set model to CPU for stability (GPU can be enabled in config)
+                device = self.config.get('perception.device', 'cpu')
+                self.yolo_model.to(device)
+                print(f"[DETECTION] ✓ YOLO model loaded successfully on {device}")
+                print(f"[DETECTION] Person detection enabled (class ID 0 only)")
+                print(f"[DETECTION] Using LEFT camera mapped to full HUD (as if camera is at nose bridge)")
+                print(f"[DETECTION] Camera offset compensation: vertical={self.camera_vertical_offset_px}px down, horizontal={self.camera_horizontal_offset_px}px left")
+                detection_rate = 30.0 / self.detection_frame_skip if self.detection_frame_skip > 0 else 30.0
+                print(f"[DETECTION] Frame skip: {self.detection_frame_skip} (~{detection_rate:.1f} detections/sec @ 30fps)")
+                logger.info(f"YOLO model loaded on {device} (person detection only, left camera)")
+            except Exception as e:
+                print(f"[DETECTION] ⚠ Failed to load YOLO model: {e}")
+                logger.error(f"Failed to load YOLO model: {e}")
+                self.yolo_model = None
             self.perception_client = None
             print("Perception: Using direct inference (service removed)")
 
@@ -682,16 +765,24 @@ class VisorApp(QObject):
             # QImage is just a wrapper - the underlying data must persist
             self._current_frame = frame.copy()
 
-            # Convert numpy array to QImage
+            # Extract right camera only for snapshots (left half of merged frame)
+            # Merged frame format: [right_camera | left_camera]
             import numpy as np
             height, width, channels = self._current_frame.shape
+            half_width = width // 2
+            self._right_camera_frame = self._current_frame[:, :half_width].copy()  # Left half = right camera
+
+            # Convert right camera to QImage for snapshot storage
+            right_bytes_per_line = channels * half_width
+            right_qimage = QImage(self._right_camera_frame.data, half_width, height, right_bytes_per_line, QImage.Format_RGB888)
+            self._current_qimage = right_qimage.copy()  # Store right camera for snapshots
+
+            # Convert full merged frame to QImage for display
             bytes_per_line = channels * width
             qimage = QImage(self._current_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
 
             if qimage.isNull():
                 return
-
-            self._current_qimage = qimage.copy()  # Store for snapshot (used for snapshots and on-demand vision)
 
             # Add frame to full recorder if recording (capture full screen with widgets)
             if self.video_recorder and self.video_recorder.is_recording_active():
@@ -726,13 +817,113 @@ class VisorApp(QObject):
                 self.frameUpdated.emit(f"image://video/{self.frame_counter}")
                 self.frame_counter += 1
 
-            # Run perception inference (DISABLED - high CPU usage)
-            # if self.perception_client:
-            #     self._run_perception_async(frame_meta)
+            # Run person detection with frame skipping
+            if self.yolo_model:
+                self.detection_frame_counter += 1
+                if self.detection_frame_counter >= self.detection_frame_skip:
+                    self.detection_frame_counter = 0
+                    self._run_person_detection(self._current_frame)
+            elif self.frame_counter == 30:  # Only log once after 30 frames
+                print("[DETECTION] ⚠ YOLO model not loaded - skipping detection")
 
         except Exception as e:
             print(f"Frame update error: {e}")
             logger.error(f"Frame update error: {e}")
+
+    def _run_person_detection(self, frame):
+        """Run YOLO person detection on frame"""
+        try:
+            import numpy as np
+
+            # Get camera dimensions from full merged frame
+            frame_height, frame_width = frame.shape[:2]
+
+            # Extract left camera only (right half of merged image)
+            # Merged frame format: [right_camera | left_camera]
+            # Left camera is pixels 1280-2560 (right half)
+            half_width = frame_width // 2
+            left_camera_frame = frame[:, half_width:]  # Right half = left camera
+
+            # Run YOLO inference on left camera only
+            # Use configured NMS threshold to eliminate duplicate detections
+            conf_threshold = self.config.get('perception.confidence_threshold', 0.7)
+            nms_threshold = self.config.get('perception.nms_threshold', 0.4)
+            max_det = self.config.get('perception.max_detections', 100)
+
+            results = self.yolo_model(
+                left_camera_frame,
+                conf=conf_threshold,
+                iou=nms_threshold,
+                max_det=max_det,
+                verbose=False
+            )
+
+            # Extract detections
+            detections = []
+
+            # Get left camera dimensions
+            left_cam_height, left_cam_width = left_camera_frame.shape[:2]
+
+            for result in results:
+                boxes = result.boxes
+
+                for box in boxes:
+                    # Get class ID and confidence
+                    cls = int(box.cls[0])
+                    conf = float(box.conf[0])
+
+                    # Filter for person class only (class ID 0 in COCO dataset)
+                    if cls != 0:  # 0 = person
+                        continue
+
+                    # Get bounding box coordinates (xyxy format) relative to left camera frame
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+
+                    # Calculate center and dimensions
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    width = x2 - x1
+                    height = y2 - y1
+
+                    # Apply offset adjustments to compensate for camera position
+                    # Vertical: Camera is 2 inches ABOVE eyeline, so shift detections DOWN
+                    # Horizontal: Camera is to the LEFT of nose bridge, so shift detections LEFT (if needed)
+                    center_x_adjusted = center_x - self.camera_horizontal_offset_px
+                    center_y_adjusted = center_y + self.camera_vertical_offset_px
+
+                    # Ensure adjusted coordinates stay within frame bounds
+                    x1_adjusted = max(0, center_x_adjusted - width / 2)
+                    x2_adjusted = min(left_cam_width, center_x_adjusted + width / 2)
+                    y1_adjusted = max(0, center_y_adjusted - height / 2)
+                    y2_adjusted = min(left_cam_height, center_y_adjusted + height / 2)
+
+                    # Convert to normalized coordinates (0.0 to 1.0) relative to left camera frame
+                    # This maps the left camera to fill the entire HUD display
+                    # Person centered in left camera will appear centered on HUD
+                    detection = {
+                        'x': float(x1_adjusted / left_cam_width),
+                        'y': float(y1_adjusted / left_cam_height),
+                        'width': float((x2_adjusted - x1_adjusted) / left_cam_width),
+                        'height': float((y2_adjusted - y1_adjusted) / left_cam_height),
+                        'label': 'person',
+                        'confidence': float(conf)
+                    }
+
+                    detections.append(detection)
+
+            # Update stored detections
+            self._current_detections = detections
+
+            # Emit signal to QML with detections
+            self.detectionsUpdated.emit(detections)
+
+        except Exception as e:
+            print(f"[DETECTION] ⚠ Error during detection: {e}")
+            logger.error(f"Person detection error: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't crash - just skip this frame
+            pass
 
     def _update_thermal_frame(self):
         """Update thermal camera frame (only called when thermal is enabled)"""
@@ -938,8 +1129,9 @@ class VisorApp(QObject):
         """Capture current frame and analyze with Claude API"""
         print("\n" + "="*60)
         print("=== SNAPSHOT TRIGGERED (P key pressed) ===")
+        print("=== Using RIGHT camera for analysis ===")
         print("="*60)
-        logger.info("Capture and analyze triggered")
+        logger.info("Capture and analyze triggered (right camera)")
 
         if self._current_qimage is None:
             logger.warning("No frame available to capture")
@@ -947,7 +1139,7 @@ class VisorApp(QObject):
             self.snapshotAnalyzed.emit("", "Error: No frame available to analyze")
             return
 
-        print("✓ Frame available, starting analysis...")
+        print("✓ Right camera frame available, starting analysis...")
         print(f"✓ Frame size: {self._current_qimage.width()}x{self._current_qimage.height()}")
 
         def analyze_async():
@@ -992,10 +1184,10 @@ class VisorApp(QObject):
 
     def _analyze_with_claude(self, image_base64: str) -> str:
         """Analyze image using Claude API"""
-        try:
-            import anthropic
-            import os
+        import anthropic
+        import os
 
+        try:
             print("Checking for Anthropic API key...")
             # Get API key from environment or config
             api_key = os.environ.get('ANTHROPIC_API_KEY') or self.config.get('claude.api_key', '')
@@ -1013,35 +1205,65 @@ To enable AI analysis:
                 print(error_msg)
                 return error_msg
 
-            print(f"API key found, calling Claude API...")
+            print(f"API key found (anthropic v{anthropic.__version__})")
+            print(f"Initializing Claude API client...")
             client = anthropic.Anthropic(api_key=api_key)
 
-            message = client.messages.create(
-                model="claude-3-5-sonnet-latest",
-                max_tokens=1024,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
+            # Try multiple model names in order of preference
+            models_to_try = [
+                "claude-sonnet-4-20250514",      # Latest Sonnet 4
+                "claude-3-5-sonnet-20250219",    # Latest Claude 3.5 Sonnet
+                "claude-3-5-sonnet-20241022",    # Older Claude 3.5 Sonnet
+                "claude-3-5-sonnet-latest",      # Generic latest
+                "claude-3-5-sonnet",             # Fallback
+            ]
+
+            last_error = None
+            for model_name in models_to_try:
+                try:
+                    print(f"Trying model: {model_name}")
+
+                    message = client.messages.create(
+                        model=model_name,
+                        max_tokens=1024,
+                        messages=[
                             {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/jpeg",
-                                    "data": image_base64,
-                                },
-                            },
-                            {
-                                "type": "text",
-                                "text": "What am I looking at? Provide a brief, concise description."
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": "image/jpeg",
+                                            "data": image_base64,
+                                        },
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": "What am I looking at? Provide a brief, concise description of the scene, objects, and any people visible."
+                                    }
+                                ],
                             }
                         ],
-                    }
-                ],
-            )
+                    )
 
-            print("Claude API analysis complete!")
-            return message.content[0].text
+                    print(f"✓ Claude API analysis complete with {model_name}!")
+                    return message.content[0].text
+
+                except anthropic.APIStatusError as e:
+                    if e.status_code == 404:
+                        print(f"  Model {model_name} not found, trying next...")
+                        last_error = e
+                        continue
+                    else:
+                        # Other errors (auth, rate limit, etc.) should not try fallback
+                        raise
+
+            # If we get here, all models failed
+            if last_error:
+                raise last_error
+            else:
+                raise Exception("All model attempts failed")
 
         except ImportError:
             error_msg = """Anthropic package not installed.
@@ -1053,6 +1275,23 @@ Or if using venv:
   source venv/bin/activate
   pip install anthropic
 """
+            print(error_msg)
+            return error_msg
+        except anthropic.APIStatusError as e:
+            # Handle specific API errors (404, 401, etc.)
+            error_msg = f"""Claude API Error ({e.status_code}): {e.message}
+
+Common issues:
+- 401: Invalid API key
+- 404: Model not found or endpoint incorrect
+- 429: Rate limit exceeded
+
+Current model: {model_name if 'model_name' in locals() else 'unknown'}
+
+Check your API key and try again.
+"""
+            logger.error(f"Claude API status error: {e.status_code} - {e.message}")
+            print(f"ERROR: Claude API returned {e.status_code}")
             print(error_msg)
             return error_msg
         except Exception as e:

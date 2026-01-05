@@ -40,10 +40,11 @@
   "perception": {
     "model_path": "models/yolov8n.pt",
     "confidence_threshold": 0.7,
-    "nms_threshold": 0.4,
+    "nms_threshold": 0.5,
     "max_detections": 100,
     "input_size": [640, 640],
-    "device": "cpu"
+    "device": "cpu",
+    "note": "nms_threshold 0.5 helps eliminate duplicate detections of same person"
   },
   "voice": {
     "asr_model": "small",
