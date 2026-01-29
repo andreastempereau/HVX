@@ -1,438 +1,326 @@
 import QtQuick 2.15
-import QtQuick.Controls 2.15
 
-// Modern JARVIS-style detection overlay for fullscreen video
+// Iron Man Mark 2 HUD targeting overlay (performance optimized)
 Item {
     id: detectionOverlay
 
     property var detections: []
-    property string sceneAnalysis: ""
-    property var smoothedDetections: []
-    property var detectionHistory: ({})
+    property var targetStates: ({})
+    property int nextTargetId: 0
 
-    // Smooth detection updates to prevent flickering
+    readonly property color hudColor: "#00D4FF"
+    readonly property color hudColorDim: "#0088AA"
+    readonly property color hudColorBright: "#66EEFF"
+
     Timer {
-        id: smoothingTimer
-        interval: 100
+        id: trackingTimer
+        interval: 60
         repeat: true
         running: visible
-        onTriggered: {
-            smoothDetections()
-        }
+        onTriggered: updateTargetTracking()
     }
 
-    // Compact object list panel (right side, below minimal status)
-    Rectangle {
-        id: objectListPanel
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: 20
-        anchors.topMargin: 60  // Below minimal status
-        width: 220
-        height: Math.min(400, objectList.implicitHeight + 30)
-        color: "#0d0d0d"
-        border.color: "#555555"
-        border.width: 1
-        radius: 0
-        opacity: 0.9
-        visible: detections.length > 0
+    Repeater {
+        id: targetRepeater
+        model: Object.keys(targetStates).length
 
-        Column {
-            id: objectList
-            anchors.fill: parent
-            anchors.margins: 15
-            spacing: 10
+        Item {
+            id: targetItem
 
-            // Header
-            Row {
-                width: parent.width
-                spacing: 10
-
-                Rectangle {
-                    width: 2
-                    height: 16
-                    color: "#888888"
-                    radius: 0
-                }
-
-                Text {
-                    text: "TARGETS"
-                    font.family: "Consolas"
-                    font.pixelSize: 10
-                    font.weight: 75
-                    color: "#aaaaaa"
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Text {
-                    text: "[" + detections.length.toString() + "]"
-                    font.family: "Consolas"
-                    font.pixelSize: 10
-                    font.weight: 75
-                    color: "#cccccc"
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+            property var targetData: {
+                var keys = Object.keys(targetStates)
+                return index < keys.length ? targetStates[keys[index]] : null
             }
 
-            // Object count summary by type
-            Column {
-                width: parent.width
-                spacing: 6
+            visible: targetData !== null
+
+            property real headCenterX: targetData ? targetData.headX * detectionOverlay.width : 0
+            property real headCenterY: targetData ? targetData.headY * detectionOverlay.height : 0
+
+            property real baseRadius: {
+                if (!targetData) return 80
+                var distance = targetData.distance || 2.0
+                return Math.max(60, Math.min(200, 200 / Math.sqrt(distance)))
+            }
+
+            property real phase: targetData ? targetData.phase : 0
+            property real pulseAmount: 1.0
+
+            SequentialAnimation on pulseAmount {
+                running: phase >= 1.0
+                loops: Animation.Infinite
+                NumberAnimation { to: 1.02; duration: 1500; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 1.0; duration: 1500; easing.type: Easing.InOutSine }
+            }
+
+            property real currentRadius: phase < 1.0 ? baseRadius * (0.2 + 0.8 * phase) : baseRadius * pulseAmount
+
+            Behavior on headCenterX { NumberAnimation { duration: 50 } }
+            Behavior on headCenterY { NumberAnimation { duration: 50 } }
+            Behavior on baseRadius { NumberAnimation { duration: 120 } }
+
+            // === SPINNING RINGS (lock-on phase) ===
+
+            // Ring 1 - Inner fast spin
+            Item {
+                x: headCenterX - currentRadius * 0.35
+                y: headCenterY - currentRadius * 0.35
+                width: currentRadius * 0.7
+                height: width
+                opacity: phase < 0.85 ? 1.0 - phase : 0
+                visible: opacity > 0
+
+                NumberAnimation on rotation {
+                    running: parent.visible
+                    loops: Animation.Infinite
+                    from: 0; to: 360; duration: 500
+                }
 
                 Repeater {
-                    model: _getObjectSummary()
-
-                    Row {
-                        width: parent.width
-                        spacing: 8
-
-                        Rectangle {
-                            width: 4
-                            height: 4
-                            radius: 0
-                            color: "#888888"
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        Text {
-                            text: modelData.label.toUpperCase()
-                            font.family: "Consolas"
-                            font.pixelSize: 9
-                            color: "#aaaaaa"
-                            width: 100
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        Rectangle {
-                            width: 28
-                            height: 14
-                            color: "#1a1a1a"
-                            border.color: "#444444"
-                            border.width: 1
-                            radius: 0
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            Text {
-                                text: "×" + modelData.count
-                                font.family: "Consolas"
-                                font.pixelSize: 8
-                                font.weight: 75
-                                color: "#cccccc"
-                                anchors.centerIn: parent
-                            }
-                        }
-
-                        Text {
-                            text: Math.round(modelData.avgConfidence * 100) + "%"
-                            font.family: "Consolas"
-                            font.pixelSize: 8
-                            color: modelData.avgConfidence > 0.7 ? "#999999" : "#666666"
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
+                    model: 3
+                    Rectangle {
+                        x: parent.width / 2 - 1.5
+                        y: 0
+                        width: 3; height: parent.height * 0.22
+                        radius: 1.5; color: hudColor
+                        transform: Rotation { origin.x: 1.5; origin.y: parent.height / 2; angle: index * 120 }
                     }
                 }
             }
-        }
-    }
 
-    // Scene analysis panel (bottom-center)
-    Rectangle {
-        anchors.bottom: parent.bottom
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottomMargin: 40
-        width: Math.max(300, sceneText.implicitWidth + 40)
-        height: 40
-        color: "#0d0d0d"
-        border.color: "#555555"
-        border.width: 1
-        radius: 0
-        opacity: 0.9
-        visible: sceneAnalysis !== ""
+            // Ring 2 - Middle counter-spin
+            Item {
+                x: headCenterX - currentRadius * 0.5
+                y: headCenterY - currentRadius * 0.5
+                width: currentRadius
+                height: width
+                opacity: phase < 0.9 ? (1.0 - phase) * 0.7 : 0
+                visible: opacity > 0
 
-        Row {
-            anchors.centerIn: parent
-            spacing: 12
+                NumberAnimation on rotation {
+                    running: parent.visible
+                    loops: Animation.Infinite
+                    from: 360; to: 0; duration: 700
+                }
 
-            Rectangle {
-                width: 4
-                height: 16
-                radius: 0
-                color: "#888888"
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            Text {
-                id: sceneText
-                text: sceneAnalysis.toUpperCase()
-                font.family: "Consolas"
-                font.pixelSize: 11
-                color: "#aaaaaa"
-                anchors.verticalCenter: parent.verticalCenter
-            }
-        }
-    }
-
-    // Detection boxes overlay
-    Repeater {
-        model: smoothedDetections
-
-        Item {
-            id: detectionBox
-            // Convert normalized coordinates to screen coordinates
-            x: modelData.x * parent.width
-            y: modelData.y * parent.height
-            width: modelData.width * parent.width
-            height: modelData.height * parent.height
-
-            // Smooth position changes
-            Behavior on x { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-            Behavior on y { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-            Behavior on width { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-            Behavior on height { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-
-            // Main box
-            Rectangle {
-                anchors.fill: parent
-                color: "transparent"
-                border.color: "#888888"
-                border.width: 2
-                radius: 0
-                opacity: 0.7
-            }
-
-            // Corner brackets (military style)
-            Repeater {
-                model: 4
-                Rectangle {
-                    width: index % 2 === 0 ? 20 : 2
-                    height: index % 2 === 0 ? 2 : 20
-                    color: "#cccccc"
-                    x: index === 0 || index === 3 ? 0 : parent.width - width
-                    y: index < 2 ? 0 : parent.height - height
+                Repeater {
+                    model: 4
+                    Rectangle {
+                        x: parent.width / 2 - 2
+                        y: 2
+                        width: 4; height: parent.height * 0.15
+                        radius: 2; color: hudColorDim
+                        transform: Rotation { origin.x: 2; origin.y: parent.height / 2 - 2; angle: index * 90 }
+                    }
                 }
             }
 
-            // Label bar (top)
+            // Ring 3 - Outer slow spin
+            Item {
+                x: headCenterX - currentRadius * 0.7
+                y: headCenterY - currentRadius * 0.7
+                width: currentRadius * 1.4
+                height: width
+                opacity: phase < 1.0 ? (1.0 - phase) * 0.5 : 0
+                visible: opacity > 0
+
+                NumberAnimation on rotation {
+                    running: parent.visible
+                    loops: Animation.Infinite
+                    from: 0; to: 360; duration: 900
+                }
+
+                Repeater {
+                    model: 6
+                    Rectangle {
+                        x: parent.width / 2 - 1
+                        y: 3
+                        width: 2; height: parent.height * 0.1
+                        radius: 1; color: hudColor
+                        transform: Rotation { origin.x: 1; origin.y: parent.height / 2 - 3; angle: index * 60 }
+                    }
+                }
+            }
+
+            // === MAIN CIRCLE (locked state) ===
+            Item {
+                id: mainCircle
+                x: headCenterX - currentRadius * 1.1
+                y: headCenterY - currentRadius * 1.1
+                width: currentRadius * 2.2
+                height: width
+                opacity: phase > 0.3 ? Math.min(1.0, (phase - 0.3) * 1.5) : 0
+                visible: opacity > 0
+
+                // Outer ring
+                Rectangle {
+                    anchors.fill: parent
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 2; border.color: hudColor
+                }
+
+                // Inner ring
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: parent.width * 0.88; height: width
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 1; border.color: hudColorDim
+                    opacity: 0.4
+                }
+
+                // Rotating ticks
+                Item {
+                    anchors.fill: parent
+                    NumberAnimation on rotation {
+                        running: mainCircle.visible
+                        loops: Animation.Infinite
+                        from: 0; to: 360; duration: 12000
+                    }
+
+                    Repeater {
+                        model: 8
+                        Rectangle {
+                            x: parent.width / 2 - 1.5
+                            y: -3
+                            width: 3; height: 12
+                            radius: 1.5; color: hudColorBright
+                            transform: Rotation { origin.x: 1.5; origin.y: parent.height / 2 + 3; angle: index * 45 }
+                        }
+                    }
+                }
+
+                // Corner accents
+                Repeater {
+                    model: 4
+                    Item {
+                        anchors.centerIn: parent
+                        width: parent.width; height: parent.height
+                        rotation: 45 + index * 90
+
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            y: -10
+                            width: 4; height: 16; radius: 2; color: hudColor
+                        }
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.horizontalCenterOffset: -12
+                            y: -4
+                            width: 4; height: 4; radius: 2; color: hudColorBright
+                        }
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.horizontalCenterOffset: 12
+                            y: -4
+                            width: 4; height: 4; radius: 2; color: hudColorBright
+                        }
+                    }
+                }
+
+                // Center crosshair
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 16; height: 2; radius: 1
+                    color: hudColor; opacity: 0.3
+                }
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 2; height: 16; radius: 1
+                    color: hudColor; opacity: 0.3
+                }
+            }
+
+            // Distance label
             Rectangle {
-                anchors.bottom: parent.top
-                anchors.left: parent.left
-                anchors.bottomMargin: 2
-                width: labelText.implicitWidth + 10
-                height: 16
-                color: "#1a1a1a"
-                border.color: "#666666"
-                border.width: 1
-                radius: 0
-                opacity: 0.9
+                visible: phase > 0.9 && targetData && targetData.distance
+                x: headCenterX + currentRadius * 0.8
+                y: headCenterY + currentRadius * 0.65
+                width: distText.implicitWidth + 14
+                height: 20
+                color: "#0a0a0a"; border.color: hudColorDim; border.width: 1; radius: 2
 
                 Text {
-                    id: labelText
+                    id: distText
                     anchors.centerIn: parent
-                    text: modelData.label.toUpperCase()
-                    font.family: "Consolas"
-                    font.pixelSize: 9
-                    font.weight: 75
-                    color: "#cccccc"
-                }
-            }
-
-            // Confidence bar (bottom right)
-            Rectangle {
-                anchors.top: parent.bottom
-                anchors.right: parent.right
-                anchors.topMargin: 2
-                width: 40
-                height: 6
-                color: "#1a1a1a"
-                border.color: "#666666"
-                border.width: 1
-                radius: 0
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.margins: 1
-                    width: (parent.width - 2) * modelData.confidence
-                    height: parent.height - 2
-                    color: "#888888"
-                }
-            }
-
-            // Crosshair center (for high confidence targets)
-            Rectangle {
-                visible: modelData.confidence > 0.8
-                anchors.centerIn: parent
-                width: 12
-                height: 2
-                color: "#999999"
-                opacity: 0.7
-
-                Rectangle {
-                    width: 2
-                    height: 12
-                    color: "#999999"
-                    anchors.centerIn: parent
+                    text: targetData && targetData.distance ? targetData.distance.toFixed(1) + "m" : ""
+                    font.family: "Consolas"; font.pixelSize: 11; font.bold: true
+                    color: hudColor
                 }
             }
         }
     }
 
-    // Functions
+    // Tracking counter
+    Rectangle {
+        anchors.top: parent.top; anchors.right: parent.right
+        anchors.margins: 20; anchors.topMargin: 60
+        width: 100; height: 30
+        color: "#0a0a0a"; border.color: hudColorDim; border.width: 1
+        visible: Object.keys(targetStates).length > 0
+
+        Row {
+            anchors.centerIn: parent; spacing: 6
+            Rectangle { width: 3; height: 14; color: hudColor }
+            Text {
+                text: "TRK " + Object.keys(targetStates).length
+                font.family: "Consolas"; font.pixelSize: 12; font.bold: true
+                color: hudColor; anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+    }
+
     function updateDetections(newDetections) {
         detections = newDetections || []
-
-        // Update scene analysis if we have detections
-        if (detections.length > 0) {
-            sceneAnalysis = _generateSceneAnalysis(detections)
-        } else {
-            sceneAnalysis = ""
-        }
     }
 
-    function smoothDetections() {
-        // Smooth detection transitions to prevent flicker
-        var current = {}
-        var result = []
+    function updateTargetTracking() {
+        var now = Date.now()
+        var matched = {}
+        var newStates = {}
 
-        // Index current detections by label+position
         for (var i = 0; i < detections.length; i++) {
             var det = detections[i]
-            var key = det.label + "_" + Math.round(det.x * 10) + "_" + Math.round(det.y * 10)
-            current[key] = det
-        }
+            if (det.label !== "person") continue
 
-        // Update history with decay
-        for (var histKey in detectionHistory) {
-            if (current[histKey]) {
-                // Still present, update position with smoothing
-                var curr = current[histKey]
-                var hist = detectionHistory[histKey]
-                detectionHistory[histKey] = {
-                    x: hist.x * 0.7 + curr.x * 0.3,
-                    y: hist.y * 0.7 + curr.y * 0.3,
-                    width: hist.width * 0.7 + curr.width * 0.3,
-                    height: hist.height * 0.7 + curr.height * 0.3,
-                    confidence: curr.confidence,
-                    label: curr.label,
-                    age: 0
+            var headX = det.x + det.width / 2
+            var headY = det.y + det.height * 0.1
+
+            var bestMatch = null, bestDist = 0.12
+
+            for (var targetId in targetStates) {
+                if (matched[targetId]) continue
+                var target = targetStates[targetId]
+                var dist = Math.sqrt(Math.pow(headX - target.headX, 2) + Math.pow(headY - target.headY, 2))
+                if (dist < bestDist) { bestDist = dist; bestMatch = targetId }
+            }
+
+            if (bestMatch) {
+                matched[bestMatch] = true
+                var existing = targetStates[bestMatch]
+                newStates[bestMatch] = {
+                    headX: headX, headY: headY,
+                    distance: det.distance || existing.distance,
+                    phase: Math.min(1.0, existing.phase + 0.07),
+                    lastSeen: now, id: bestMatch
                 }
             } else {
-                // Not present, age out
-                detectionHistory[histKey].age++
-                if (detectionHistory[histKey].age < 3) {
-                    // Keep for a few frames to smooth disappearance
-                    detectionHistory[histKey].confidence *= 0.7
-                } else {
-                    delete detectionHistory[histKey]
+                var newId = "t" + nextTargetId++
+                newStates[newId] = {
+                    headX: headX, headY: headY,
+                    distance: det.distance || null,
+                    phase: 0.0, lastSeen: now, id: newId
                 }
             }
         }
 
-        // Add new detections
-        for (var newKey in current) {
-            if (!detectionHistory[newKey]) {
-                var newDet = current[newKey]
-                detectionHistory[newKey] = {
-                    x: newDet.x,
-                    y: newDet.y,
-                    width: newDet.width,
-                    height: newDet.height,
-                    confidence: newDet.confidence,
-                    label: newDet.label,
-                    age: 0
-                }
+        for (var oldId in targetStates) {
+            if (!newStates[oldId] && now - targetStates[oldId].lastSeen < 350) {
+                newStates[oldId] = targetStates[oldId]
             }
         }
 
-        // Build output array
-        for (var outKey in detectionHistory) {
-            result.push(detectionHistory[outKey])
-        }
-
-        smoothedDetections = result
-    }
-
-    function _getObjectSummary() {
-        // Group detections by label and count them
-        var summary = {}
-        for (var i = 0; i < detections.length; i++) {
-            var label = detections[i].label
-            if (!summary[label]) {
-                summary[label] = {
-                    label: label,
-                    count: 0,
-                    totalConfidence: 0
-                }
-            }
-            summary[label].count++
-            summary[label].totalConfidence += detections[i].confidence
-        }
-
-        // Convert to array and calculate averages
-        var result = []
-        for (var key in summary) {
-            result.push({
-                label: summary[key].label,
-                count: summary[key].count,
-                avgConfidence: summary[key].totalConfidence / summary[key].count
-            })
-        }
-
-        // Sort by count descending
-        result.sort(function(a, b) { return b.count - a.count })
-        return result
-    }
-
-    function _getObjectColor(label) {
-        var colors = {
-            "person": "#FF6B6B",
-            "car": "#4ECDC4",
-            "truck": "#45B7D1",
-            "motorcycle": "#9C27B0",
-            "bicycle": "#96CEB4",
-            "traffic light": "#FECA57",
-            "stop sign": "#FF5722",
-            "laptop": "#00BCD4",
-            "keyboard": "#8BC34A",
-            "mouse": "#607D8B",
-            "cell phone": "#E91E63",
-            "book": "#795548",
-            "cup": "#FF9800",
-            "bottle": "#2196F3"
-        }
-        return colors[label] || "#FFFFFF"
-    }
-
-
-    function _generateSceneAnalysis(detections) {
-        var personCount = detections.filter(d => d.label === "person").length
-        var vehicleCount = detections.filter(d => ["car", "truck", "motorcycle", "bus"].includes(d.label)).length
-        var totalObjects = detections.length
-
-        if (personCount > 0) {
-            if (personCount === 1) {
-                return "Person detected - maintain spatial awareness"
-            } else {
-                return personCount + " people in view - crowded environment"
-            }
-        } else if (vehicleCount > 0) {
-            return vehicleCount + " vehicle(s) detected - traffic environment"
-        } else if (totalObjects > 5) {
-            return "Complex scene - " + totalObjects + " objects detected"
-        } else if (detections.some(d => ["laptop", "keyboard", "monitor"].includes(d.label))) {
-            return "Workspace environment - productivity setup detected"
-        } else if (totalObjects > 0) {
-            return totalObjects + " object(s) in view - monitoring surroundings"
-        }
-        return "Clear environment - no objects detected"
-    }
-
-    // Smooth appearance animation
-    opacity: 0
-    PropertyAnimation on opacity {
-        running: visible
-        to: 1.0
-        duration: 400
-        easing.type: Easing.OutQuad
+        targetStates = newStates
     }
 }

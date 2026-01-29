@@ -8,21 +8,56 @@ import cv2
 import numpy as np
 import threading
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+
+def find_flir_device():
+    """
+    Auto-detect FLIR thermal camera device path.
+    Scans /sys/class/video4linux/ for FLIR devices.
+
+    Returns:
+        str: Device path (e.g., '/dev/video0') or None if not found
+    """
+    v4l_path = '/sys/class/video4linux'
+
+    if not os.path.exists(v4l_path):
+        return None
+
+    for device in sorted(os.listdir(v4l_path)):
+        name_path = os.path.join(v4l_path, device, 'name')
+        try:
+            with open(name_path, 'r') as f:
+                name = f.read().strip()
+                # Match FLIR/Boson devices
+                if 'FLIR' in name or 'Boson' in name:
+                    dev_path = f'/dev/{device}'
+                    logger.info(f"Found FLIR device: {name} at {dev_path}")
+                    return dev_path
+        except (IOError, OSError):
+            continue
+
+    return None
 
 class ThermalCamera:
     """FLIR Boson thermal camera handler - optimized for low latency"""
 
-    def __init__(self, device='/dev/video2', width=640, height=512):
+    def __init__(self, device=None, width=640, height=512):
         """
         Initialize thermal camera
 
         Args:
-            device: Video device path (default /dev/video2 for FLIR)
+            device: Video device path, or None to auto-detect FLIR camera
             width: Frame width (640 for Boson)
             height: Frame height (512 for Boson)
         """
+        if device is None:
+            device = find_flir_device()
+            if device is None:
+                logger.warning("No FLIR device found, falling back to /dev/video0")
+                device = '/dev/video0'
         self.device = device
         self.width = width
         self.height = height
@@ -49,8 +84,8 @@ class ThermalCamera:
             # Minimize buffering for lowest latency
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-            # Set format to YUV for efficiency
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUYV'))
+            # Use camera's native format (YU12/I420 for FLIR Boson)
+            # Don't force FOURCC - let driver use native format
 
             # Start capture thread
             self.running = True

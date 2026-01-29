@@ -6,6 +6,7 @@ Helmet Visor UI - Qt/QML dual-eye compositor with AR overlays
 import sys
 import asyncio
 import threading
+import signal
 from pathlib import Path
 from typing import Optional
 import os
@@ -152,11 +153,11 @@ class VisorApp(QObject):
 
         # YOLO person detection
         self.yolo_model = None
-        self.detection_frame_skip = 9  # Process every Nth frame (at 30fps: 9 = ~3.3 detections/sec)
+        self.detection_frame_skip = 15  # Process every Nth frame (at 30fps: 15 = ~2 detections/sec)
         self.detection_frame_counter = 0
         # Camera offset compensation (camera mounted above and to the left of bridge of nose)
         self.camera_vertical_offset_px = 80  # 2-inch camera offset above eyeline (shift detections DOWN)
-        self.camera_horizontal_offset_px = 0  # Horizontal offset (shift LEFT if camera is left of center)
+        self.camera_horizontal_offset_px = 120  # Camera is left of eye center, shift detections LEFT
 
         # Voice listener
         self.voice_listener = None
@@ -328,11 +329,11 @@ class VisorApp(QObject):
                 self.yolo_model.to(device)
                 print(f"[DETECTION] ✓ YOLO model loaded successfully on {device}")
                 print(f"[DETECTION] Person detection enabled (class ID 0 only)")
-                print(f"[DETECTION] Using LEFT camera mapped to full HUD (as if camera is at nose bridge)")
-                print(f"[DETECTION] Camera offset compensation: vertical={self.camera_vertical_offset_px}px down, horizontal={self.camera_horizontal_offset_px}px left")
+                print(f"[DETECTION] Using Gemini 335 depth camera (1280x800 color + depth)")
+                print(f"[DETECTION] Distance estimation: ENABLED via depth sensor")
                 detection_rate = 30.0 / self.detection_frame_skip if self.detection_frame_skip > 0 else 30.0
-                print(f"[DETECTION] Frame skip: {self.detection_frame_skip} (~{detection_rate:.1f} detections/sec @ 30fps)")
-                logger.info(f"YOLO model loaded on {device} (person detection only, left camera)")
+                print(f"[DETECTION] Detection rate: ~{detection_rate:.1f} Hz")
+                logger.info(f"YOLO model loaded on {device} (person detection via Gemini camera)")
             except Exception as e:
                 print(f"[DETECTION] ⚠ Failed to load YOLO model: {e}")
                 logger.error(f"Failed to load YOLO model: {e}")
@@ -352,9 +353,13 @@ class VisorApp(QObject):
 
     def _setup_timers(self):
         """Setup update timers"""
-        # Frame update timer
+        # Frame update timer (for CSI camera if available)
         self.frame_timer = QTimer()
         self.frame_timer.timeout.connect(self._update_frame)
+
+        # Detection timer (Gemini camera - runs independently)
+        self.detection_timer = QTimer()
+        self.detection_timer.timeout.connect(self._update_detection)
 
         # Thermal frame timer (only runs when enabled)
         self.thermal_timer = QTimer()
@@ -419,9 +424,12 @@ class VisorApp(QObject):
             wake_word = self.config.get('assistant.wake_word', 'hey_jarvis')
             mic_device = self.config.get('assistant.input_device_index', None)
 
-            print(f"Initializing wake word detector (openWakeWord)...")
-            print(f"  Wake word: '{wake_word}'")
-            print(f"  Mic device: {mic_device or 'default'}")
+            print(f"", flush=True)
+            print(f"="*60, flush=True)
+            print(f"WAKE WORD DETECTOR SETUP", flush=True)
+            print(f"="*60, flush=True)
+            print(f"  Wake word: '{wake_word}'", flush=True)
+            print(f"  Mic device index: {mic_device}", flush=True)
 
             self.wake_word_detector = WakeWordDetector(
                 keywords=[wake_word],
@@ -731,12 +739,18 @@ class VisorApp(QObject):
     def _on_wake_word_detected(self, keyword: str):
         """Handle wake word detection"""
         logger.info(f"Wake word detected: {keyword}")
-        print(f"\n🎤 Wake word '{keyword}' detected! Activating assistant...")
+        print(f"\n" + "="*60, flush=True)
+        print(f"🎤 WAKE WORD DETECTED: '{keyword}'", flush=True)
+        print(f"="*60, flush=True)
 
         # Wake word detector has released the microphone
         # Now activate voice assistant (it will open the mic)
         if self.voice_assistant:
+            print(f"[Main] Activating voice assistant...", flush=True)
             self.voice_assistant.activate()
+            print(f"[Main] Voice assistant activated!", flush=True)
+        else:
+            print(f"[Main] ERROR: No voice assistant to activate!", flush=True)
 
         # Note: wake_word_detector.resume() will be called when assistant deactivates
 
@@ -774,18 +788,23 @@ class VisorApp(QObject):
 
             # Start wake word detector
             if self.wake_word_detector:
-                print("Starting wake word detector...")
+                print("", flush=True)
+                print("="*60, flush=True)
+                print("STARTING WAKE WORD DETECTOR", flush=True)
+                print("="*60, flush=True)
                 self.wake_word_detector.start(self._on_wake_word_detected)
-                print("Wake word detector started!")
+                print("Wake word detector thread started!", flush=True)
 
                 # Wait for wake word detector to fully initialize before starting voice assistant
                 # This prevents microphone/PyAudio resource conflicts
-                print("Waiting for wake word detector to initialize...")
+                print("Waiting 3 seconds for wake word detector to initialize...", flush=True)
                 import time
                 time.sleep(3)  # Give it 3 seconds to initialize PyAudio and open audio stream
-                print("Wake word detector initialization complete")
+                print("Wake word detector should now be listening!", flush=True)
+                print("Say 'Hey Jarvis' to activate the assistant", flush=True)
+                print("="*60, flush=True)
             else:
-                print("WARNING: No wake word detector to start")
+                print("WARNING: No wake word detector to start", flush=True)
 
             # Start voice assistant (but don't activate it - wake word will activate it)
             if self.voice_assistant:
@@ -814,6 +833,17 @@ class VisorApp(QObject):
                     print("WARNING: GPS client failed to start (check permissions and connection)")
             else:
                 print("WARNING: No GPS client to start")
+
+            # Start detection system (uses Gemini camera)
+            if self.yolo_model and self.gemini_camera:
+                detection_fps = 30.0 / self.detection_frame_skip  # ~3.3 Hz with skip=9
+                detection_interval = int(1000 / detection_fps)
+                self.detection_timer.start(detection_interval)
+                print(f"[DETECTION] Started Gemini camera detection at {detection_fps:.1f} Hz")
+            elif self.yolo_model:
+                print("[DETECTION] ⚠ YOLO loaded but Gemini camera not available")
+            else:
+                print("[DETECTION] ⚠ YOLO model not loaded - detection disabled")
 
             # Start AR system if enabled (can work without camera for test pins)
             if self.ar_enabled and self.ar_anchoring:
@@ -846,52 +876,64 @@ class VisorApp(QObject):
     def stop(self):
         """Stop the visor application"""
         self.running = False
-        self.frame_timer.stop()
-        self.hud_timer.stop()
-        self.ar_timer.stop()
 
-        if self.voice_listener:
-            self.voice_listener.stop()
+        # Stop timers first
+        try:
+            self.frame_timer.stop()
+            self.hud_timer.stop()
+            self.ar_timer.stop()
+            if hasattr(self, 'thermal_timer'):
+                self.thermal_timer.stop()
+            if hasattr(self, 'detection_timer'):
+                self.detection_timer.stop()
+        except Exception as e:
+            logger.debug(f"Timer stop: {e}")
 
-        if self.caption_client:
-            self.caption_client.stop()
+        # Stop each component, catching errors to ensure full cleanup
+        components = [
+            ('voice_listener', 'stop'),
+            ('caption_client', 'stop'),
+            ('wake_word_detector', 'stop'),
+            ('voice_assistant', 'stop'),
+            ('system_monitor', 'stop'),
+            ('gps_client', 'stop'),
+            ('direct_camera', 'stop'),
+            ('gemini_camera', 'stop'),
+            ('thermal_camera', 'stop'),
+            ('perception_client', 'disconnect'),
+        ]
 
-        if self.wake_word_detector:
-            self.wake_word_detector.stop()
+        for attr, method in components:
+            try:
+                obj = getattr(self, attr, None)
+                if obj:
+                    getattr(obj, method)()
+            except Exception as e:
+                logger.debug(f"Cleanup {attr}: {e}")
 
-        if self.voice_assistant:
-            self.voice_assistant.stop()
-
-
-        if self.system_monitor:
-            self.system_monitor.stop()
-
-        if self.gps_client:
-            self.gps_client.stop()
-
-        if self.video_recorder and self.video_recorder.is_recording_active():
-            self.video_recorder.stop_recording()
-
-        if self.direct_camera:
-            self.direct_camera.stop()
-
-        if self.gemini_camera:
-            self.gemini_camera.stop()
-
-        if self.perception_client:
-            self.perception_client.disconnect()
+        # Stop video recorder if active
+        try:
+            if self.video_recorder and self.video_recorder.is_recording_active():
+                self.video_recorder.stop_recording()
+        except Exception as e:
+            logger.debug(f"Video recorder stop: {e}")
 
         logger.info("Visor app stopped")
 
     def _update_frame(self):
-        """Update video frame and run perception"""
-        if not self.running or not self.direct_camera:
+        """Update video frame from CSI camera (if available)"""
+        if not self.running:
             return
 
         try:
             # Record frame for FPS tracking
             if self.hud_controller:
                 self.hud_controller.record_frame()
+
+            # CSI camera frame processing (skip if no direct camera)
+            if not self.direct_camera:
+                self.frame_counter += 1
+                return
 
             # Get frame from direct camera (numpy array in RGB format)
             frame = self.direct_camera.get_frame()
@@ -954,41 +996,60 @@ class VisorApp(QObject):
                 self.frameUpdated.emit(f"image://video/{self.frame_counter}")
                 self.frame_counter += 1
 
-            # Run person detection with frame skipping
-            if self.yolo_model:
-                self.detection_frame_counter += 1
-                if self.detection_frame_counter >= self.detection_frame_skip:
-                    self.detection_frame_counter = 0
-                    self._run_person_detection(self._current_frame)
-            elif self.frame_counter == 30:  # Only log once after 30 frames
-                print("[DETECTION] ⚠ YOLO model not loaded - skipping detection")
+        except Exception as e:
+            print(f"Frame update error: {e}")
+            logger.error(f"Frame update error: {e}")
+
+    def _update_detection(self):
+        """Run YOLO person detection using Gemini depth camera"""
+        if not self.running or not self.gemini_camera or not self.yolo_model:
+            return
+
+        try:
+            # Get color frame from Gemini camera
+            color_frame = self.gemini_camera.get_color_frame()
+            if color_frame is None:
+                return
+
+            # Store frame for voice assistant vision queries (convert BGR to RGB then to QImage)
+            rgb_frame = cv2.cvtColor(color_frame, cv2.COLOR_BGR2RGB)
+            height, width, channels = rgb_frame.shape
+            bytes_per_line = channels * width
+            # Keep numpy array alive by storing it
+            self._vision_frame = rgb_frame.copy()
+            self._current_qimage = QImage(self._vision_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).copy()
+
+            # Get depth frame for distance estimation
+            depth_frame = self.gemini_camera.get_depth_frame()
+
+            # Run detection
+            self._run_person_detection(color_frame, depth_frame)
 
         except Exception as e:
             print(f"Frame update error: {e}")
             logger.error(f"Frame update error: {e}")
 
-    def _run_person_detection(self, frame):
-        """Run YOLO person detection on frame"""
+    def _run_person_detection(self, color_frame, depth_frame=None):
+        """
+        Run YOLO person detection on Gemini camera frame
+
+        Args:
+            color_frame: BGR color frame from Gemini camera
+            depth_frame: Optional depth frame (uint16, values in mm) for distance estimation
+        """
         try:
             import numpy as np
 
-            # Get camera dimensions from full merged frame
-            frame_height, frame_width = frame.shape[:2]
+            # Get frame dimensions
+            frame_height, frame_width = color_frame.shape[:2]
 
-            # Extract left camera only (right half of merged image)
-            # Merged frame format: [right_camera | left_camera]
-            # Left camera is pixels 1280-2560 (right half)
-            half_width = frame_width // 2
-            left_camera_frame = frame[:, half_width:]  # Right half = left camera
-
-            # Run YOLO inference on left camera only
-            # Use configured NMS threshold to eliminate duplicate detections
+            # Run YOLO inference
             conf_threshold = self.config.get('perception.confidence_threshold', 0.7)
             nms_threshold = self.config.get('perception.nms_threshold', 0.4)
             max_det = self.config.get('perception.max_detections', 100)
 
             results = self.yolo_model(
-                left_camera_frame,
+                color_frame,
                 conf=conf_threshold,
                 iou=nms_threshold,
                 max_det=max_det,
@@ -998,8 +1059,10 @@ class VisorApp(QObject):
             # Extract detections
             detections = []
 
-            # Get left camera dimensions
-            left_cam_height, left_cam_width = left_camera_frame.shape[:2]
+            # Get depth frame dimensions for coordinate mapping
+            depth_height, depth_width = (0, 0)
+            if depth_frame is not None:
+                depth_height, depth_width = depth_frame.shape[:2]
 
             for result in results:
                 boxes = result.boxes
@@ -1013,40 +1076,61 @@ class VisorApp(QObject):
                     if cls != 0:  # 0 = person
                         continue
 
-                    # Get bounding box coordinates (xyxy format) relative to left camera frame
+                    # Get bounding box coordinates (xyxy format)
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
 
                     # Calculate center and dimensions
                     center_x = (x1 + x2) / 2
                     center_y = (y1 + y2) / 2
-                    width = x2 - x1
-                    height = y2 - y1
+                    box_width = x2 - x1
+                    box_height = y2 - y1
+
+                    # Get distance from depth frame if available
+                    distance_m = None
+                    if depth_frame is not None and depth_width > 0:
+                        # Map color frame coordinates to depth frame coordinates
+                        # (they may have different resolutions)
+                        depth_x = int(center_x * depth_width / frame_width)
+                        depth_y = int(center_y * depth_height / frame_height)
+
+                        # Clamp to valid range
+                        depth_x = max(0, min(depth_x, depth_width - 1))
+                        depth_y = max(0, min(depth_y, depth_height - 1))
+
+                        # Sample depth at center of detection (in mm)
+                        depth_mm = depth_frame[depth_y, depth_x]
+                        if depth_mm > 0:  # Valid depth reading
+                            distance_m = float(depth_mm) / 1000.0  # Convert to meters
 
                     # Apply offset adjustments to compensate for camera position
-                    # Vertical: Camera is 2 inches ABOVE eyeline, so shift detections DOWN
-                    # Horizontal: Camera is to the LEFT of nose bridge, so shift detections LEFT (if needed)
                     center_x_adjusted = center_x - self.camera_horizontal_offset_px
                     center_y_adjusted = center_y + self.camera_vertical_offset_px
 
                     # Ensure adjusted coordinates stay within frame bounds
-                    x1_adjusted = max(0, center_x_adjusted - width / 2)
-                    x2_adjusted = min(left_cam_width, center_x_adjusted + width / 2)
-                    y1_adjusted = max(0, center_y_adjusted - height / 2)
-                    y2_adjusted = min(left_cam_height, center_y_adjusted + height / 2)
+                    x1_adjusted = max(0, center_x_adjusted - box_width / 2)
+                    x2_adjusted = min(frame_width, center_x_adjusted + box_width / 2)
+                    y1_adjusted = max(0, center_y_adjusted - box_height / 2)
+                    y2_adjusted = min(frame_height, center_y_adjusted + box_height / 2)
 
-                    # Convert to normalized coordinates (0.0 to 1.0) relative to left camera frame
-                    # This maps the left camera to fill the entire HUD display
-                    # Person centered in left camera will appear centered on HUD
+                    # Convert to normalized coordinates (0.0 to 1.0)
                     detection = {
-                        'x': float(x1_adjusted / left_cam_width),
-                        'y': float(y1_adjusted / left_cam_height),
-                        'width': float((x2_adjusted - x1_adjusted) / left_cam_width),
-                        'height': float((y2_adjusted - y1_adjusted) / left_cam_height),
+                        'x': float(x1_adjusted / frame_width),
+                        'y': float(y1_adjusted / frame_height),
+                        'width': float((x2_adjusted - x1_adjusted) / frame_width),
+                        'height': float((y2_adjusted - y1_adjusted) / frame_height),
                         'label': 'person',
-                        'confidence': float(conf)
+                        'confidence': float(conf),
+                        'distance': distance_m  # Distance in meters (None if unavailable)
                     }
 
                     detections.append(detection)
+
+            # Log detection count periodically
+            if detections and self.frame_counter % 30 == 0:
+                dist_info = ""
+                if detections[0].get('distance'):
+                    dist_info = f" (nearest: {detections[0]['distance']:.1f}m)"
+                print(f"[DETECTION] {len(detections)} person(s) detected{dist_info}")
 
             # Update stored detections
             self._current_detections = detections
@@ -1059,8 +1143,6 @@ class VisorApp(QObject):
             logger.error(f"Person detection error: {e}")
             import traceback
             traceback.print_exc()
-            # Don't crash - just skip this frame
-            pass
 
     def _update_thermal_frame(self):
         """Update thermal camera frame (only called when thermal is enabled)"""
@@ -1428,7 +1510,7 @@ class VisorApp(QObject):
             print("[Thermal] Enabling thermal overlay")
             # Initialize thermal camera if not already done
             if not self.thermal_camera:
-                self.thermal_camera = ThermalCamera(device='/dev/video2', width=640, height=512)
+                self.thermal_camera = ThermalCamera()  # Auto-detects FLIR device
                 if not self.thermal_camera.start():
                     print("[Thermal] Failed to start thermal camera")
                     self.thermal_enabled = False
@@ -1731,6 +1813,21 @@ def main():
     # Create Qt application
     app = QGuiApplication(sys.argv)
 
+    # Setup signal handling for clean Ctrl+C shutdown
+    # Qt blocks Python's signal handling, so we need a timer to let Python process signals
+    def sigint_handler(*args):
+        logger.info("Received SIGINT, shutting down...")
+        print("\nShutting down...")
+        app.quit()
+
+    signal.signal(signal.SIGINT, sigint_handler)
+
+    # Timer that lets Python process signals during Qt event loop
+    from PySide6.QtCore import QTimer
+    signal_timer = QTimer()
+    signal_timer.timeout.connect(lambda: None)  # Just lets Python run
+    signal_timer.start(100)  # Check every 100ms
+
     # Register QML types
     qmlRegisterType(VisorApp, 'HelmetUI', 1, 0, 'VisorApp')
 
@@ -1779,14 +1876,12 @@ def main():
     # Start visor app
     visor_app.start()
 
-    try:
-        # Run application
-        result = app.exec()
-    except KeyboardInterrupt:
-        logger.info("Received shutdown signal")
-        result = 0
-    finally:
-        visor_app.stop()
+    # Run application
+    result = app.exec()
+
+    # Clean shutdown
+    signal_timer.stop()
+    visor_app.stop()
 
     sys.exit(result)
 

@@ -68,11 +68,14 @@ class OpenAIRealtimeAssistant:
     def start(self):
         """Start the voice assistant"""
         if self.is_running:
+            print("[OpenAI Assistant] Already running", flush=True)
             return
 
+        print("[OpenAI Assistant] Starting assistant thread...", flush=True)
         self.is_running = True
         self.thread = threading.Thread(target=self._run_assistant, daemon=True)
         self.thread.start()
+        print("[OpenAI Assistant] Thread started, connecting to OpenAI...", flush=True)
         logger.info("OpenAI Realtime assistant started")
 
     def stop(self):
@@ -85,23 +88,30 @@ class OpenAIRealtimeAssistant:
 
     def activate(self):
         """Activate the assistant (called when wake word detected)"""
+        print("[OpenAI Assistant] activate() called", flush=True)
         self.is_active = True
         self.send_audio_enabled = True  # Start sending mic audio to OpenAI
 
         # Initialize audio streams now (mic becomes available after wake word detector releases it)
         if self.audio is None:
-            print("[OpenAI Assistant] Initializing audio streams...")
+            print("[OpenAI Assistant] Initializing audio streams...", flush=True)
             self._init_audio_lazy()
+        else:
+            print("[OpenAI Assistant] Audio already initialized", flush=True)
 
-        print("[OpenAI Assistant] Activated - now listening continuously")
+        print("[OpenAI Assistant] Activated - now listening continuously", flush=True)
         logger.info("Assistant activated")
 
         # Send initial greeting
+        print(f"[OpenAI Assistant] Checking websocket: loop={self.loop is not None}, ws={self.websocket is not None}", flush=True)
         if self.loop and self.websocket:
+            print("[OpenAI Assistant] Sending greeting...", flush=True)
             asyncio.run_coroutine_threadsafe(
                 self._send_greeting(),
                 self.loop
             )
+        else:
+            print("[OpenAI Assistant] WARNING: No loop or websocket - cannot send greeting!", flush=True)
 
     def deactivate(self):
         """Deactivate the assistant and resume wake word detection"""
@@ -225,11 +235,13 @@ class OpenAIRealtimeAssistant:
                     close_timeout=5,   # Faster close
                 ) as ws:
                     self.websocket = ws
-                    print("[OpenAI] Connected!")
+                    print("[OpenAI] ✓ Connected to Realtime API!", flush=True)
                     retry_count = 0  # Reset on successful connection
 
                     # Configure session
+                    print("[OpenAI] Configuring session...", flush=True)
                     await self._configure_session()
+                    print("[OpenAI] ✓ Session configured - waiting for wake word activation", flush=True)
 
                     # Don't initialize audio streams yet - wait for wake word activation
                     # This allows wake word detector to use the microphone
@@ -544,10 +556,11 @@ class OpenAIRealtimeAssistant:
             print(f"[Web Search Error] {error_msg}")
             return error_msg
 
-    async def _send_camera_frame(self):
-        """Analyze current camera frame using GPT-4 Vision (Chat API) and speak the response"""
+    async def _send_camera_frame(self, user_query: str = None):
+        """Analyze current camera frame using GPT-4 Vision and speak the response"""
         if not self.frame_getter:
             print("[Vision] No frame getter available")
+            await self._send_vision_result("I don't have access to the camera right now.")
             return
 
         try:
@@ -559,6 +572,7 @@ class OpenAIRealtimeAssistant:
             current_frame = self.frame_getter()
             if not current_frame:
                 print("[Vision] No camera frame available")
+                await self._send_vision_result("I couldn't capture an image. The camera may not be ready.")
                 return
 
             # Save frame to temporary file
@@ -571,23 +585,29 @@ class OpenAIRealtimeAssistant:
                 with open(temp_path, "rb") as f:
                     img_data = base64.b64encode(f.read()).decode("utf-8")
 
-                print(f"[Vision] Captured frame, sending to GPT-4 Vision...")
+                print(f"[Vision] Captured frame, sending to GPT-4o Vision...")
 
-                # Use OpenAI Chat Completions API for vision (Realtime API doesn't support images)
+                # Build the prompt based on user's question
+                if user_query:
+                    vision_prompt = f"The user asked: '{user_query}'. Look at this image and answer their question directly in 2-3 concise sentences. Speak naturally as if responding in conversation."
+                else:
+                    vision_prompt = "Describe what you see in 2-3 concise sentences. Be direct and conversational."
+
+                # Use OpenAI Chat Completions API for vision
                 client = OpenAI(api_key=self.openai_api_key)
                 response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
                         {
                             "role": "system",
-                            "content": self.system_prompt
+                            "content": "You are Aegis, an AI assistant in an AR helmet. Respond concisely and naturally to vision queries. Don't say 'I see an image of' - just describe what's there as if you're looking at it yourself."
                         },
                         {
                             "role": "user",
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": "Describe what you see in 2-3 concise sentences."
+                                    "text": vision_prompt
                                 },
                                 {
                                     "type": "image_url",
@@ -598,23 +618,43 @@ class OpenAIRealtimeAssistant:
                             ]
                         }
                     ],
-                    max_tokens=150
+                    max_tokens=200
                 )
 
                 vision_description = response.choices[0].message.content
-                print(f"[Vision] GPT-4 Vision response: {vision_description}")
+                print(f"[Vision] Response: {vision_description}")
 
                 # Send vision description back to Realtime API for speaking
-                # This keeps everything in one conversation flow
                 await self._send_vision_result(vision_description)
 
                 # Cleanup
                 os.unlink(temp_path)
+            else:
+                await self._send_vision_result("I had trouble capturing the image.")
 
         except Exception as e:
             logger.error(f"Error analyzing camera frame: {e}")
             import traceback
             traceback.print_exc()
+            await self._send_vision_result("I encountered an error analyzing the image.")
+
+    async def _send_quick_acknowledgment(self, text: str):
+        """Send a quick spoken acknowledgment without waiting for response"""
+        if not self.websocket or not self.is_active:
+            return
+
+        try:
+            # Request quick audio response
+            response_request = {
+                "type": "response.create",
+                "response": {
+                    "modalities": ["audio"],
+                    "instructions": f"Say only this one word: {text}"
+                }
+            }
+            await self.websocket.send(json.dumps(response_request))
+        except Exception as e:
+            logger.error(f"Error sending acknowledgment: {e}")
 
     async def _send_vision_result(self, vision_text: str):
         """Send vision analysis result to Realtime API to speak"""
@@ -787,11 +827,18 @@ class OpenAIRealtimeAssistant:
                 return
 
             # Check if user is asking about vision
-            vision_keywords = ["what do you see", "what am i looking at", "describe this",
-                             "analyze this", "what is this", "look at", "can you see"]
+            vision_keywords = [
+                "what do you see", "what am i looking at", "what is this",
+                "what's this", "whats this", "describe this", "analyze this",
+                "look at this", "can you see", "tell me what", "identify this",
+                "what is in front", "what's in front", "looking at here",
+                "see this", "see here", "check this out", "what is that"
+            ]
             if any(keyword in transcript for keyword in vision_keywords):
-                print(f"[Vision] Detected vision query, sending camera frame...")
-                await self._send_camera_frame()
+                print(f"[Vision] Detected vision query: '{transcript}'")
+                # Quick audio acknowledgment that we're looking
+                await self._send_quick_acknowledgment("Analyzing...")
+                await self._send_camera_frame(transcript)
 
         # Transcript (text response from assistant)
         elif msg_type == "response.text.delta":
@@ -924,14 +971,11 @@ class OpenAIRealtimeAssistant:
             return  # Already initialized
 
         try:
-            import os
             import numpy as np
             from scipy import signal as scipy_signal
 
             self.audio = pyaudio.PyAudio()
-
-            # Use PulseAudio environment variable to route to correct device
-            os.environ['PULSE_SINK'] = 'alsa_output.usb-KTMicro_KT_USB_Audio_2021-06-07-0000-0000-0000--00.analog-stereo'
+            self.output_channels = 1  # Default to mono, may change to stereo
 
             # Input stream - auto-detect supported sample rate and resample to 24kHz
             # Try 24kHz first, then fallback to higher rates with resampling
@@ -957,11 +1001,16 @@ class OpenAIRealtimeAssistant:
                         raise
                     continue
 
-            # Output stream (speakers) - try 44.1kHz first (most compatible), then 48kHz, then 24kHz
-            self.output_native_rate = 44100
+            # Output stream (speakers) - try various sample rates
+            self.output_native_rate = None
             self.needs_output_resampling = True
 
-            for test_rate in [44100, 48000, 24000]:
+            # Try many common sample rates
+            output_rates_to_try = [48000, 44100, 32000, 24000, 22050, 16000, 8000]
+
+            print(f"[OpenAI Audio] Trying output device {self.output_device_index}...", flush=True)
+
+            for test_rate in output_rates_to_try:
                 try:
                     self.output_stream = self.audio.open(
                         format=pyaudio.paInt16,
@@ -973,12 +1022,57 @@ class OpenAIRealtimeAssistant:
                     )
                     self.output_native_rate = test_rate
                     self.needs_output_resampling = (test_rate != 24000)
-                    print(f"[OpenAI Audio] Output: {test_rate}Hz (resample={self.needs_output_resampling})")
+                    print(f"[OpenAI Audio] ✓ Output: {test_rate}Hz (resample={self.needs_output_resampling})", flush=True)
                     break
                 except Exception as e:
-                    if test_rate == 44100:  # Last attempt
-                        raise
+                    print(f"[OpenAI Audio]   Output {test_rate}Hz failed: {e}", flush=True)
                     continue
+
+            if self.output_native_rate is None:
+                print(f"[OpenAI Audio] ⚠ Mono failed, trying stereo...", flush=True)
+                # Some USB speakers require stereo
+                for test_rate in [48000, 44100, 32000, 16000]:
+                    try:
+                        self.output_stream = self.audio.open(
+                            format=pyaudio.paInt16,
+                            channels=2,  # Try stereo
+                            rate=test_rate,
+                            output=True,
+                            output_device_index=self.output_device_index,
+                            frames_per_buffer=int(test_rate * 0.05),
+                        )
+                        self.output_native_rate = test_rate
+                        self.output_channels = 2
+                        self.needs_output_resampling = (test_rate != 24000)
+                        print(f"[OpenAI Audio] ✓ Output: {test_rate}Hz STEREO", flush=True)
+                        break
+                    except Exception as e:
+                        print(f"[OpenAI Audio]   Stereo {test_rate}Hz failed", flush=True)
+                        continue
+
+            # If still no output, try default device
+            if self.output_native_rate is None:
+                print(f"[OpenAI Audio] ⚠ Trying default output device...", flush=True)
+                for test_rate in [48000, 44100, 16000]:
+                    try:
+                        self.output_stream = self.audio.open(
+                            format=pyaudio.paInt16,
+                            channels=2,
+                            rate=test_rate,
+                            output=True,
+                            # No device index = default
+                            frames_per_buffer=int(test_rate * 0.05),
+                        )
+                        self.output_native_rate = test_rate
+                        self.output_channels = 2
+                        self.needs_output_resampling = True
+                        print(f"[OpenAI Audio] ✓ Using DEFAULT output at {test_rate}Hz STEREO", flush=True)
+                        break
+                    except:
+                        continue
+
+            if self.output_native_rate is None:
+                print(f"[OpenAI Audio] ❌ FAILED TO OPEN ANY OUTPUT DEVICE!", flush=True)
 
             print(f"[OpenAI Audio] Streams initialized")
             logger.info("Audio streams initialized on-demand")
@@ -1059,7 +1153,8 @@ class OpenAIRealtimeAssistant:
                 # Get audio from queue (non-blocking)
                 try:
                     audio_data = self.audio_queue.get_nowait()
-                    print(f"[Audio Play] Got {len(audio_data)} bytes from queue, output_stream={self.output_stream is not None}")
+                    if self.output_stream is None:
+                        print(f"[Audio Play] ⚠ Got {len(audio_data)} bytes but NO OUTPUT STREAM!", flush=True)
 
                     if self.output_stream:
                         # Convert to numpy for processing
@@ -1070,21 +1165,27 @@ class OpenAIRealtimeAssistant:
                             audio_np = (audio_np * self.output_volume).astype(np.int16)
 
                         # Resample if needed (OpenAI sends 24kHz, device might need different rate)
-                        if self.needs_output_resampling:
+                        if self.needs_output_resampling and self.output_native_rate:
                             num_samples = int(len(audio_np) * self.output_native_rate / 24000)
                             audio_np = scipy_signal.resample(audio_np, num_samples).astype(np.int16)
+
+                        # Convert mono to stereo if needed
+                        if hasattr(self, 'output_channels') and self.output_channels == 2:
+                            # Duplicate mono to stereo (interleave L and R)
+                            stereo = np.zeros(len(audio_np) * 2, dtype=np.int16)
+                            stereo[0::2] = audio_np  # Left channel
+                            stereo[1::2] = audio_np  # Right channel
+                            audio_np = stereo
 
                         audio_data = audio_np.tobytes()
 
                         # Run blocking write in executor to avoid blocking event loop
                         loop = asyncio.get_event_loop()
-                        print(f"[Audio Play] Writing {len(audio_data)} bytes to speaker...")
                         await loop.run_in_executor(
                             executor,
                             self.output_stream.write,
                             audio_data
                         )
-                        print(f"[Audio Play] Write complete")
                 except queue.Empty:
                     await asyncio.sleep(0.01)
             except Exception as e:
