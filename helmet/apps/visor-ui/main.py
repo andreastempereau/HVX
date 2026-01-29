@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 import os
+import numpy as np
 
 # Fix Qt plugin conflict with OpenCV - must be done BEFORE Qt imports
 # OpenCV sets QT_QPA_PLATFORM_PLUGIN_PATH which breaks PySide6
@@ -59,11 +60,27 @@ from direct_camera import DirectCamera  # Native GStreamer for main camera
 from thermal_camera import ThermalCamera  # FLIR Boson thermal camera
 from openai_voice_assistant import OpenAIRealtimeAssistant
 from wake_word_detector import WakeWordDetector
-from gyro_sensor import GyroSensor
+# gyro_sensor removed - using Gemini 335 IMU for head tracking
 from system_monitor import SystemMonitor
 from full_recorder import FullRecorder
 from gps_client import GPSClient
 from minimap_controller import MinimapController, MinimapImageProvider
+
+# AR system imports (optional - requires pyorbbecsdk2)
+try:
+    from gemini_camera import Gemini335Camera  # Orbbec Gemini 335 depth camera
+    from hand_gesture_detector import HandGestureDetector  # Hand gesture detection
+    from ar_anchoring import ARAnchoringSystem, ARPin  # AR spatial anchoring
+    AR_AVAILABLE = True
+    print("✓ AR system modules loaded (Gemini 335 support enabled)")
+except ImportError as e:
+    AR_AVAILABLE = False
+    Gemini335Camera = None
+    HandGestureDetector = None
+    ARAnchoringSystem = None
+    ARPin = None
+    print(f"⚠ AR system not available: {e}")
+    print("  To enable AR features, install: pip3 install pyorbbecsdk2")
 
 import logging
 logger = logging.getLogger(__name__)
@@ -108,6 +125,8 @@ class VisorApp(QObject):
     gpsPositionUpdated = Signal(float, float, float, float)  # lat, lon, altitude, heading
     gpsStatusUpdated = Signal('QVariantMap')  # GPS status info
     minimapUpdated = Signal(str)  # minimap image path
+    arPinsUpdated = Signal('QVariantList')  # AR pin positions and labels
+    gestureDetected = Signal(str, int, int)  # gesture type, x, y coordinates
 
     def __init__(self, config=None, image_provider=None, qml_window=None):
         super().__init__()
@@ -151,8 +170,7 @@ class VisorApp(QObject):
         # Wake word detector
         self.wake_word_detector = None
 
-        # Gyroscope sensor
-        self.gyro_sensor = None
+        # Head tracking via Gemini 335 IMU (gyro_sensor removed)
 
         # System monitor
         self.system_monitor = None
@@ -169,6 +187,12 @@ class VisorApp(QObject):
 
         # Current heading from IMU (for minimap rotation)
         self._current_heading = 0.0
+
+        # AR Anchoring system
+        self.gemini_camera = None  # Orbbec Gemini 335 depth camera
+        self.hand_gesture_detector = None  # Hand gesture detection
+        self.ar_anchoring = None  # AR pin management
+        self.ar_enabled = False  # AR system toggle
 
         # Setup components
         if self.config:
@@ -193,9 +217,10 @@ class VisorApp(QObject):
             print("\n--- Setting up voice assistant ---")
             self._setup_assistant()
             print("--- Voice assistant setup complete ---\n")
-            print("\n--- Setting up gyroscope sensor ---")
-            self._setup_gyro()
-            print("--- Gyroscope sensor setup complete ---\n")
+            print("\n--- Setting up AR anchoring system ---")
+            self._setup_ar_system()
+            print("--- AR anchoring system setup complete ---\n")
+            # Gyroscope sensor removed - using Gemini 335 IMU for head tracking
             print("\n--- Setting up GPS ---")
             self._setup_gps()
             print("--- GPS setup complete ---\n")
@@ -204,33 +229,37 @@ class VisorApp(QObject):
         """Initialize service clients"""
         try:
             # Direct camera (dual USB cameras with split-screen)
-            dual_mode = self.config.get('video.dual_mode', True)
-            device_left = self.config.get('video.device_left', '/dev/video0')
-            device_right = self.config.get('video.device_right', '/dev/video1')
-            width = self.config.get('video.width', 1280)
-            height = self.config.get('video.height', 720)
-            fps = self.config.get('video.fps', 30)
+            # TEMPORARILY DISABLED - CSI cameras disconnected
+            print("⚠ CSI camera initialization disabled (cameras disconnected)")
+            self.direct_camera = None
 
-            print(f"Initializing dual camera setup...")
-            print(f"  Left camera: {device_left}")
-            print(f"  Right camera: {device_right}")
-            print(f"  Resolution: {width}x{height}@{fps}fps")
+            # dual_mode = self.config.get('video.dual_mode', True)
+            # device_left = self.config.get('video.device_left', '/dev/video0')
+            # device_right = self.config.get('video.device_right', '/dev/video1')
+            # width = self.config.get('video.width', 1280)
+            # height = self.config.get('video.height', 720)
+            # fps = self.config.get('video.fps', 30)
 
-            self.direct_camera = DirectCamera(
-                sensor_id=0,  # Not used in dual mode
-                width=width,
-                height=height,
-                fps=fps,
-                dual_mode=dual_mode,
-                device_left=device_left,
-                device_right=device_right
-            )
+            # print(f"Initializing dual camera setup...")
+            # print(f"  Left camera: {device_left}")
+            # print(f"  Right camera: {device_right}")
+            # print(f"  Resolution: {width}x{height}@{fps}fps")
 
-            if self.direct_camera.start():
-                print("✓ Dual camera initialized successfully")
-            else:
-                print("⚠ Dual camera failed to initialize")
-                self.direct_camera = None
+            # self.direct_camera = DirectCamera(
+            #     sensor_id=0,  # Not used in dual mode
+            #     width=width,
+            #     height=height,
+            #     fps=fps,
+            #     dual_mode=dual_mode,
+            #     device_left=device_left,
+            #     device_right=device_right
+            # )
+
+            # if self.direct_camera.start():
+            #     print("✓ Dual camera initialized successfully")
+            # else:
+            #     print("⚠ Dual camera failed to initialize")
+            #     self.direct_camera = None
 
             # Perception client - REMOVED (using direct inference now)
             # Initialize YOLO model for person-only detection
@@ -334,6 +363,10 @@ class VisorApp(QObject):
         # HUD update timer
         self.hud_timer = QTimer()
         self.hud_timer.timeout.connect(self._update_hud)
+
+        # AR update timer (gesture detection and pin updates)
+        self.ar_timer = QTimer()
+        self.ar_timer.timeout.connect(self._update_ar_system)
 
     def _setup_voice(self):
         """Setup voice listener"""
@@ -451,24 +484,6 @@ class VisorApp(QObject):
             print(f"ERROR: Voice assistant not available: {e}")
             traceback.print_exc()
 
-    def _setup_gyro(self):
-        """Setup gyroscope sensor"""
-        try:
-            # Get I2C bus from config (default 7, where we detected the BNO055)
-            i2c_bus = self.config.get('gyro.i2c_bus', 7)
-
-            print(f"Initializing gyroscope sensor on I2C bus {i2c_bus}...")
-
-            self.gyro_sensor = GyroSensor(i2c_bus=i2c_bus)
-            logger.info("Gyroscope sensor initialized")
-            print("✓ Gyroscope sensor initialized successfully")
-
-        except Exception as e:
-            import traceback
-            logger.warning(f"Gyroscope sensor not available: {e}")
-            print(f"ERROR: Gyroscope sensor not available: {e}")
-            traceback.print_exc()
-
     def _setup_system_monitor(self):
         """Setup system telemetry monitor"""
         try:
@@ -510,6 +525,92 @@ class VisorApp(QObject):
             logger.warning(f"GPS client not available: {e}")
             print(f"ERROR: GPS client not available: {e}")
             traceback.print_exc()
+
+    def _setup_ar_system(self):
+        """Setup AR anchoring system with optional Gemini 335 depth camera"""
+        try:
+            print(f"Initializing AR anchoring system...")
+
+            # Get screen resolution from config
+            screen_width = self.config.get('display.width', 1920)
+            screen_height = self.config.get('display.height', 1080)
+
+            # Always initialize AR anchoring system (can work without camera for test pins)
+            # Import directly to avoid module-level import issues
+            try:
+                from ar_anchoring import ARAnchoringSystem
+                self.ar_anchoring = ARAnchoringSystem(
+                    screen_width=screen_width,
+                    screen_height=screen_height,
+                    fov_horizontal=46.0,  # Xreal approximate FOV
+                    virtual_screen_distance=2.0  # Virtual screen at 2m
+                )
+                print("✓ AR anchoring system initialized")
+                self.ar_enabled = True
+            except Exception as e:
+                print(f"⚠ Failed to initialize AR anchoring: {e}")
+                self.ar_anchoring = None
+                self.ar_enabled = False
+
+            # Try to initialize Gemini camera (optional)
+            if AR_AVAILABLE:
+                try:
+                    # Initialize Gemini 335 camera with IMU enabled
+                    # NOTE: fps=15 to reduce USB bandwidth (was 30, caused keyboard disconnects)
+                    self.gemini_camera = Gemini335Camera(
+                        depth_width=640,
+                        depth_height=480,
+                        color_width=1280,
+                        color_height=800,
+                        fps=15,
+                        enable_imu=True  # Use Gemini's built-in IMU for head tracking
+                    )
+
+                    if self.gemini_camera.start():
+                        print("✓ Gemini 335 camera initialized")
+
+                        # Setup IMU callback for head tracking (replaces BNO055)
+                        if self.gemini_camera.enable_imu:
+                            self.gemini_camera.set_imu_callback(self._on_gemini_imu_update)
+                            print("✓ Gemini 335 IMU callback registered for head tracking")
+                        else:
+                            print("⚠ Gemini 335 IMU disabled")
+
+                        # Initialize hand gesture detector
+                        self.hand_gesture_detector = HandGestureDetector(
+                            min_hand_depth=0.3,  # 30cm minimum
+                            max_hand_depth=1.0,  # 1m maximum
+                            min_hand_area=2000
+                        )
+                        print("✓ Hand gesture detector initialized")
+                    else:
+                        print("⚠ Gemini 335 camera failed to start")
+                        self.gemini_camera = None
+
+                except Exception as e:
+                    print(f"⚠ Gemini camera not available: {e}")
+                    self.gemini_camera = None
+            else:
+                print("⚠ AR camera modules not available (missing pyorbbecsdk2)")
+                print("  AR test pins still work - press X to add, Z to clear")
+                self.gemini_camera = None
+                self.hand_gesture_detector = None
+
+            if self.ar_enabled:
+                print("✓ AR system ready (press X to add test pins, Z to clear)")
+                logger.info("AR system initialized")
+            else:
+                print("⚠ AR system disabled")
+
+        except Exception as e:
+            import traceback
+            logger.warning(f"AR system setup error: {e}")
+            print(f"ERROR: AR system setup error: {e}")
+            traceback.print_exc()
+            self.gemini_camera = None
+            self.hand_gesture_detector = None
+            self.ar_anchoring = None
+            self.ar_enabled = False
 
     def _setup_video_recorder(self):
         """Setup full recorder (video + widgets + audio)"""
@@ -564,19 +665,39 @@ class VisorApp(QObject):
         # Emit to QML
         self.orientationUpdated.emit(heading, roll, pitch)
 
-    def _on_orientation_update(self, orientation_data: dict):
-        """Handle orientation updates from gyroscope (called from sensor thread)"""
-        # Extract all euler angles
-        heading = orientation_data['euler'][0] or 0.0  # Heading/yaw is index 0
-        roll = orientation_data['euler'][1] or 0.0  # Roll is index 1
-        pitch = orientation_data['euler'][2] or 0.0  # Pitch is index 2
+    def _on_gemini_imu_update(self, orientation_data: dict):
+        """Handle orientation updates from Gemini 335 IMU (called from camera thread)"""
+        # Extract orientation from Gemini IMU
+        pitch = orientation_data.get('pitch', 0.0)
+        roll = orientation_data.get('roll', 0.0)
+        # YAW IS BROKEN - gyro integration produces garbage data
+        # Disabling yaw tracking until we can fix the gyro or get a magnetometer
+        yaw = 0.0  # Lock yaw to 0 for now
 
-        # Update current heading for minimap
+        # Initialize smoothing
+        if not hasattr(self, '_smooth_pitch'):
+            self._smooth_pitch = pitch
+            self._smooth_roll = roll
+
+        # Smooth pitch and roll (they work via accelerometer)
+        alpha = 0.1
+        self._smooth_pitch = alpha * pitch + (1 - alpha) * self._smooth_pitch
+        self._smooth_roll = alpha * roll + (1 - alpha) * self._smooth_roll
+
+        # Use smoothed values, yaw locked to 0
+        self._process_orientation(yaw, self._smooth_roll, self._smooth_pitch)
+
+    def _process_orientation(self, heading: float, roll: float, pitch: float):
+        """Process orientation data from any IMU source"""
+        # Store heading for internal use (but NOT for minimap - IMU yaw drifts)
         self._current_heading = heading
 
-        # Update minimap rotation if available
-        if self.minimap_controller:
-            self.minimap_controller.update_heading(heading)
+        # NOTE: Don't update minimap from IMU - yaw drifts without magnetometer
+        # Minimap heading is updated from GPS in _on_gps_position_update()
+
+        # Update AR anchoring system with head orientation
+        if self.ar_anchoring and self.ar_enabled:
+            self.ar_anchoring.set_head_orientation(heading, pitch, roll)
 
         # Use QMetaObject.invokeMethod for thread-safe signal emission
         from PySide6.QtCore import QMetaObject, Qt, Q_ARG
@@ -598,8 +719,8 @@ class VisorApp(QObject):
         if self.minimap_controller:
             self.minimap_controller.update_position(lat, lon)
 
-            # Use GPS heading if IMU not available and GPS has heading data
-            if not self.gyro_sensor and heading and heading > 0:
+            # Use GPS heading for minimap if available (more accurate than IMU for absolute heading)
+            if heading and heading > 0:
                 self.minimap_controller.update_heading(heading)
 
     def _on_gps_status_update(self, status: dict):
@@ -674,13 +795,7 @@ class VisorApp(QObject):
             else:
                 print("WARNING: No voice assistant to start")
 
-            # Start gyroscope sensor (60 Hz update rate for smooth tracking)
-            if self.gyro_sensor:
-                print("Starting gyroscope sensor...")
-                self.gyro_sensor.start(callback=self._on_orientation_update, rate_hz=60)
-                print("Gyroscope sensor started!")
-            else:
-                print("WARNING: No gyroscope sensor to start")
+            # Head tracking now handled by Gemini 335 IMU (gyro_sensor removed)
 
             # Start system monitor
             if self.system_monitor:
@@ -700,6 +815,26 @@ class VisorApp(QObject):
             else:
                 print("WARNING: No GPS client to start")
 
+            # Start AR system if enabled (can work without camera for test pins)
+            if self.ar_enabled and self.ar_anchoring:
+                print("Starting AR system...")
+                self.ar_timer.start(100)  # 10 Hz for pin updates
+
+                # Check head tracking status (via Gemini 335 IMU)
+                has_head_tracking = self.gemini_camera and self.gemini_camera.enable_imu
+                if has_head_tracking:
+                    print("✓ AR system started (pitch/roll only - yaw disabled)")
+                    print("  ⚠ Gyro yaw integration broken - left/right tracking disabled")
+                    print("  Pins track up/down head movement only")
+                else:
+                    print("⚠ AR system started WITHOUT head tracking")
+
+                if self.gemini_camera:
+                    print("  Gesture detection: ENABLED (fist=add, palm=remove)")
+                print("  Press X to add test pin, Z to clear all")
+            else:
+                print("WARNING: AR system not available")
+
             print("Visor app started successfully")
             logger.info("Visor app started")
 
@@ -713,6 +848,7 @@ class VisorApp(QObject):
         self.running = False
         self.frame_timer.stop()
         self.hud_timer.stop()
+        self.ar_timer.stop()
 
         if self.voice_listener:
             self.voice_listener.stop()
@@ -726,8 +862,6 @@ class VisorApp(QObject):
         if self.voice_assistant:
             self.voice_assistant.stop()
 
-        if self.gyro_sensor:
-            self.gyro_sensor.stop()
 
         if self.system_monitor:
             self.system_monitor.stop()
@@ -740,6 +874,9 @@ class VisorApp(QObject):
 
         if self.direct_camera:
             self.direct_camera.stop()
+
+        if self.gemini_camera:
+            self.gemini_camera.stop()
 
         if self.perception_client:
             self.perception_client.disconnect()
@@ -955,6 +1092,198 @@ class VisorApp(QObject):
         except Exception as e:
             logger.error(f"Thermal frame update error: {e}")
 
+    def _update_ar_system(self):
+        """Update AR system: detect gestures and update pin projections"""
+        if not self.ar_enabled or not self.ar_anchoring:
+            return
+
+        try:
+            # Always update pin projections (even without camera frames for gesture detection)
+            # This ensures pins are rendered based on head orientation changes
+
+            # Only do gesture detection if camera is available
+            if self.gemini_camera and self.hand_gesture_detector:
+                # Get frames from Gemini camera
+                color_frame, depth_frame, _ = self.gemini_camera.get_frames()
+
+
+                # Only detect gestures if we have frames
+                if color_frame is not None and depth_frame is not None:
+                    # Detect hand gestures
+                    gesture_result = self.hand_gesture_detector.detect(color_frame, depth_frame)
+
+                    if gesture_result is not None:
+                        gesture_type, (hand_x, hand_y), hand_depth = gesture_result
+
+                        if gesture_type == 'fist':
+                            # FIST: Create a new pin at hand location
+                            # Convert screen coordinates to 3D position using depth
+                            pin_position = self._screen_point_to_3d(hand_x, hand_y, hand_depth, depth_frame)
+
+                            if pin_position is not None:
+                                self.ar_anchoring.add_pin(
+                                    pin_position,
+                                    label=f"Pin {len(self.ar_anchoring.pins) + 1}",
+                                    color=(0, 255, 0)
+                                )
+                                print(f"[AR] Pin created at {pin_position} (depth: {hand_depth:.2f}m)")
+
+                        elif gesture_type == 'palm':
+                            # OPEN PALM: Remove pin if looking at one
+                            pin_to_remove = self.ar_anchoring.get_pin_at_screen_position(hand_x, hand_y, tolerance=100)
+
+                            if pin_to_remove:
+                                self.ar_anchoring.remove_pin(pin_to_remove.id)
+                                print(f"[AR] Pin {pin_to_remove.id} removed")
+
+            # Always update pin projections and send to QML (even without camera)
+            self._emit_ar_pins()
+
+        except Exception as e:
+            logger.error(f"AR system update error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _screen_point_to_3d(self, screen_x: int, screen_y: int, depth: float, depth_frame: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Convert 2D screen coordinates + depth to 3D world position
+
+        Args:
+            screen_x: X coordinate in depth frame
+            screen_y: Y coordinate in depth frame
+            depth: Depth in meters
+            depth_frame: Depth image for reference
+
+        Returns:
+            [x, y, z] position in world coordinates (meters), or None if invalid
+        """
+        try:
+            import numpy as np
+            import math
+
+            # Simple perspective projection (assumes depth camera centered)
+            # FOV estimates for Gemini 335: ~60° horizontal, ~45° vertical
+            fov_h = np.radians(60)
+            fov_v = np.radians(45)
+
+            h, w = depth_frame.shape
+
+            # Normalize screen coordinates to -0.5 to 0.5
+            norm_x = (screen_x / w) - 0.5
+            norm_y = (screen_y / h) - 0.5
+
+            # Calculate angles
+            angle_x = norm_x * fov_h
+            angle_y = norm_y * fov_v
+
+            # Convert to 3D position in CAMERA coordinates
+            # Z is forward (depth), X is right, Y is down
+            cam_z = depth
+            cam_x = cam_z * np.tan(angle_x)
+            cam_y = cam_z * np.tan(angle_y)
+
+            camera_pos = np.array([cam_x, cam_y, cam_z], dtype=np.float64)
+
+            # Transform from camera coordinates to WORLD coordinates
+            # by applying the current head rotation
+            if self.ar_anchoring:
+                # Get absolute head orientation (relative + reference)
+                yaw = math.radians(self.ar_anchoring.head_yaw + self.ar_anchoring.reference_yaw)
+                pitch = math.radians(self.ar_anchoring.head_pitch + self.ar_anchoring.reference_pitch)
+                roll = math.radians(self.ar_anchoring.head_roll + self.ar_anchoring.reference_roll)
+
+                # Apply rotation to convert camera coords to world coords
+                world_pos = self._rotate_camera_to_world(camera_pos, yaw, pitch, roll)
+                return world_pos
+            else:
+                return camera_pos
+
+        except Exception as e:
+            print(f"[AR] Error converting to 3D: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _rotate_camera_to_world(self, point: np.ndarray, yaw: float, pitch: float, roll: float) -> np.ndarray:
+        """
+        Rotate point from camera coordinates to world coordinates
+
+        Args:
+            point: [x, y, z] in camera coordinates
+            yaw, pitch, roll: Head orientation in radians
+
+        Returns:
+            [x, y, z] in world coordinates
+        """
+        import numpy as np
+        import math
+
+        # Rotation matrices (camera to world = forward rotation)
+        # Yaw (around Y axis)
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+        R_yaw = np.array([
+            [cos_yaw, 0, sin_yaw],
+            [0, 1, 0],
+            [-sin_yaw, 0, cos_yaw]
+        ])
+
+        # Pitch (around X axis)
+        cos_pitch = math.cos(pitch)
+        sin_pitch = math.sin(pitch)
+        R_pitch = np.array([
+            [1, 0, 0],
+            [0, cos_pitch, -sin_pitch],
+            [0, sin_pitch, cos_pitch]
+        ])
+
+        # Roll (around Z axis)
+        cos_roll = math.cos(roll)
+        sin_roll = math.sin(roll)
+        R_roll = np.array([
+            [cos_roll, -sin_roll, 0],
+            [sin_roll, cos_roll, 0],
+            [0, 0, 1]
+        ])
+
+        # Apply rotations: Yaw -> Pitch -> Roll (reverse order of inverse)
+        rotated = R_yaw @ R_pitch @ R_roll @ point
+        return rotated
+
+    def _emit_ar_pins(self):
+        """Emit current AR pins with screen positions to QML"""
+        if not self.ar_anchoring:
+            return
+
+        try:
+            # Get all visible pins with screen positions
+            pins_with_positions = self.ar_anchoring.get_all_pins_screen_positions()
+            total_pins = len(self.ar_anchoring.pins)
+
+            # Convert to QVariantList format for QML
+            pin_list = []
+            for pin, (screen_x, screen_y) in pins_with_positions:
+                # Convert BGR color tuple to hex format for QML (e.g., "#00FF00")
+                r, g, b = pin.color[2], pin.color[1], pin.color[0]  # BGR to RGB
+                hex_color = f"#{r:02x}{g:02x}{b:02x}"
+                pin_dict = {
+                    'id': pin.id,
+                    'x': int(screen_x),
+                    'y': int(screen_y),
+                    'label': str(pin.label),
+                    'color': hex_color
+                }
+                pin_list.append(pin_dict)
+
+            # Always emit to QML (even if empty, to clear pins)
+            self.arPinsUpdated.emit(pin_list)
+
+        except Exception as e:
+            import traceback
+            logger.error(f"AR pin emission error: {e}")
+            print(f"[AR] _emit_ar_pins error: {e}")
+            traceback.print_exc()
+
     def _run_perception_async(self, frame_meta):
         """Run perception inference asynchronously"""
         def run_perception():
@@ -1123,6 +1452,92 @@ class VisorApp(QObject):
         else:
             print("[Thermal] Cannot trigger NUC - thermal camera not initialized")
             logger.warning("NUC trigger requested but thermal camera not active")
+
+    @Slot()
+    def toggleARAnchoring(self):
+        """Toggle AR anchoring system"""
+        if not self.ar_anchoring or not self.gemini_camera:
+            print("[AR] AR system not available")
+            return
+
+        self.ar_enabled = not self.ar_enabled
+
+        if self.ar_enabled:
+            print("[AR] Enabling AR anchoring system")
+            # Start AR update timer (30 FPS)
+            self.ar_timer.start(33)  # ~30 FPS
+        else:
+            print("[AR] Disabling AR anchoring system")
+            # Stop AR timer
+            self.ar_timer.stop()
+
+        logger.info(f"AR anchoring: {'enabled' if self.ar_enabled else 'disabled'}")
+
+    @Slot()
+    def clearAllARPins(self):
+        """Clear all AR pins"""
+        if self.ar_anchoring:
+            self.ar_anchoring.clear_all_pins()
+            self._emit_ar_pins()
+            print("[AR] All pins cleared")
+        else:
+            print("[AR] AR system not available")
+
+    @Slot()
+    def createTestPin(self):
+        """Create a test AR pin in the direction user is currently looking"""
+        print("\n[AR] Creating test pin...")
+
+        if self.ar_anchoring:
+            import numpy as np
+            import math
+
+            # Start with pin at 2m directly ahead in CAMERA coordinates
+            camera_pos = np.array([0.0, 0.0, 2.0], dtype=np.float64)
+
+            # Get current RELATIVE head orientation (what projection uses)
+            yaw = self.ar_anchoring.head_yaw
+            pitch = self.ar_anchoring.head_pitch
+            roll = self.ar_anchoring.head_roll
+
+            print(f"[AR] Current head (relative): yaw={yaw:.1f}° pitch={pitch:.1f}° roll={roll:.1f}°")
+            print(f"[AR] Reference frame: yaw={self.ar_anchoring.reference_yaw:.1f}° pitch={self.ar_anchoring.reference_pitch:.1f}°")
+
+            # Transform from camera to world coordinates using FORWARD rotation
+            # (opposite of the inverse rotation used in projection)
+            world_pos = self._rotate_camera_to_world(
+                camera_pos,
+                math.radians(yaw),
+                math.radians(pitch),
+                math.radians(roll)
+            )
+
+            pin_num = len(self.ar_anchoring.pins) + 1
+            pin = self.ar_anchoring.add_pin(
+                world_pos,
+                label=f"Pin {pin_num}",
+                color=(0, 255, 0)  # Green (BGR)
+            )
+
+            print(f"[AR] Pin {pin.id} world pos: [{world_pos[0]:.2f}, {world_pos[1]:.2f}, {world_pos[2]:.2f}]")
+
+            # Immediately test projection
+            screen_pos = self.ar_anchoring.project_to_screen(world_pos)
+            print(f"[AR] Immediate projection: {screen_pos}")
+
+            # Emit to QML
+            self._emit_ar_pins()
+        else:
+            print("[AR] ERROR: ar_anchoring is None!")
+
+    @Slot()
+    def resetARReferenceFrame(self):
+        """Reset AR reference frame to current head orientation"""
+        if self.ar_anchoring:
+            self.ar_anchoring.reset_reference_frame()
+            print("[AR] Reference frame reset")
+        else:
+            print("[AR] AR system not available")
 
     @Slot()
     def captureAndAnalyze(self):

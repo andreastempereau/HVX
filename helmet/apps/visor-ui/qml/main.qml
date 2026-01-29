@@ -145,6 +145,16 @@ ApplicationWindow {
         enabled: window.systemReady
     }
 
+    // AR Pin Overlay - Shows spatial pins anchored in 3D space
+    // Note: This needs to be a direct child of window, not mainDisplay, to ensure visibility
+    ARPinOverlay {
+        id: arPinOverlay
+        anchors.fill: parent
+        visible: window.systemReady
+        opacity: 1.0
+        z: 500  // Above most overlays but below HUD wheel
+    }
+
     // Snapshot analysis widget
     SnapshotAnalysis {
         id: snapshotAnalysis
@@ -240,6 +250,14 @@ ApplicationWindow {
                 case Qt.Key_Space:
                     voiceOverlay.show("Listening...", true)
                     break
+                case Qt.Key_X:  // 'X' key creates a test AR pin
+                    console.log("X pressed - creating test pin")
+                    visorApp.createTestPin()
+                    break
+                case Qt.Key_Z:  // 'Z' key clears all AR pins
+                    console.log("Z pressed - clearing all pins")
+                    visorApp.clearAllARPins()
+                    break
             }
             event.accepted = true
         }
@@ -289,6 +307,14 @@ ApplicationWindow {
 
             // Update preset wheel with orientation
             hudPresetWheel.updateOrientation(headingAngle, rollAngle, pitchAngle)
+        }
+
+        function onArPinsUpdated(pins) {
+            arPinOverlay.updatePins(pins)
+        }
+
+        function onGestureDetected(gestureType, x, y) {
+            // Gesture logging disabled to reduce spam
         }
     }
 
